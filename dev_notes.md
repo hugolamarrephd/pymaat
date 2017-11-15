@@ -11,22 +11,22 @@ Install [Cygwin64 Terminal](https://cygwin.com/install.html) and select all pack
 Download [installer](https://www.python.org/ftp/python/3.6.3/python-3.6.3-macosx10.6.pkg) and follow instructions.
 
 ## Git set-up
-### Basic confif
+### Basic config
     $ git config --global user.name "NAME"
     $ git config --global user.email "EMAIL@EXAMPLE.COM"
     $ git config --global credential.helper 'store --file ~.git-credential'
 ### Cloning repo
 * First, select root path for project:
-    export PYMAAT_PATH=~/pymaat/
+    `$export PYMAAT_PATH=~/pymaat/`
 * Then, clone repository:
-    $ git clone https://github.com/hugolamarrephd/pymaat/ $PYMAAT_PATH
+    `$ git clone https://github.com/hugolamarrephd/pymaat/ $PYMAAT_PATH`
 * Enter Github username/password. Remember that if you use two-factor identification you must 
 generate a permanent **token** from *Settings>Developer settings>Personal access tokens* and use it in lieu of a password.
 
 ## Setting-up virtualenvwrapper
 ### Installation
     $ python3.6 -m pip install virtualenvwrapper
-    export VIRTUALENVWRAPPER_PYTHON=$(which python3.6)
+    $ export VIRTUALENVWRAPPER_PYTHON=$(which python3.6)
     $ source $(find / -type f -name virtualenvwrapper.sh -print -quit)
     $ mkvirtualenv pymaat
 
@@ -35,27 +35,32 @@ generate a permanent **token** from *Settings>Developer settings>Personal access
     $ cd $PYMAAT_PATH
     $ pip install -r requirements.txt 
 
-## Bash set-up (in '~/.bash\_profile')
-First, set root of project as environment variable for convenience:
-    export PYMAAT_PATH=~/pymaat/
-Add root to python path:
-    export PYTHONPATH=$PYTHONPATH:$PYMAAT_PATH
-Set-up virtual environment
-    export VIRTUALENVWRAPPER_PYTHON=$(which python3.6)
-Source virtualenvwrapper shell script:
-    source $(find / -type f -name virtualenvwrapper.sh -print -quit)
-Work-on pymaat by default (can be commented out)
-    workon pymaat  
+## Bash set-up (in `~/.bash\_profile`)
+Line-by-line description:
+1. Set root of project as environment variable for convenience
+2. Add root to python path
+3. Set-up virtual environment
+4. Source virtualenvwrapper shell script
+5. Work-on pymaat by default (can be commented out)
  
+    export PYMAAT_PATH=~/pymaat/
+    export PYTHONPATH=$PYTHONPATH:$PYMAAT_PATH
+    export VIRTUALENVWRAPPER_PYTHON=$(which python3.6)
+    source $(find / -type f -name virtualenvwrapper.sh -print -quit)
+    workon pymaat  
+
 ## Tests
-Grant execution permission:
-    $ chmod +x tests/run.py	
-Running tests from command line:
-    $ tests/run.py
+* Grant execution permission:
+    `$ chmod +x tests/run.py`	
+* Running tests from command line:
+    `$ tests/run.py`
 
 ## Text Editor
-We strongly encourage vim as text editor. In any case, make sure:
+We strongly encourage to use vim as text editor. In any case, make sure:
+
 * each indentation level is separated by exactly 4 white spaces;
-* there is no trailing white spaces or end-of-lines at respectively to end of each line and the end of a file
+* there is no trailing white spaces or end-of-lines at respectively the end of each line or the end of a file;
+* .py files respect [PEP8](https://www.python.org/dev/peps/pep-0008/);
+
 before each commit.
 
