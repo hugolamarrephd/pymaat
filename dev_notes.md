@@ -86,9 +86,9 @@ $ git branch -d your-feature-branch
     export PYMAAT_PATH=~/pymaat/
     export PYTHONPATH=$PYTHONPATH:$PYMAAT_PATH
     export VIRTUALENVWRAPPER_PYTHON=$(which python3.6)
-    venv_path=$(find /usr -type f -name virtualenvwrapper.sh -print -quit)
-    if [[ -r venv_path ]]; then
-        source venv_path
+    venv_path=$(find / -type f -name virtualenvwrapper.sh -print -quit)
+    if [[ -r $venv_path ]]; then
+        source $venv_path
     else
         echo "WARNING: Can't find virtualenvwrapper.sh"
     fi
