@@ -26,8 +26,8 @@ Download [python](https://www.python.org/ftp/python/3.6.3/python-3.6.3-macosx10.
 generate a permanent **token** from *Settings>Developer settings>Personal access tokens* and use it in lieu of a password.
 
 ### Contrib guidelines
-#### Basic Workflow
-0. Create your feature branch: `git checkout -b your-local-feature-branch`
+#### Basic workflow
+0. Create your feature branch: `$ git checkout -b your-local-feature-branch`
 1. Always run `$ git diff ` before staging (or `$ git diff --staged` when ready to commit) and manually inspect changes.
 2. In particular, make sure there are no trailing whitespaces.
 3. Craft simple messages (no description) that help **you** identify each commit
@@ -35,14 +35,14 @@ generate a permanent **token** from *Settings>Developer settings>Personal access
 #### Pull requests to `master`
 0. Update repo: `$ git fetch`
 1. Be sure to be in feature branch: `$ git checkout your-local-feature-branch`
-2. Double check **everything**: `git diff HEAD origin/master`
-3. Merge your work: `git rebase -i origin/master`
+2. Double check **everything**: `$ git diff HEAD origin/master`
+3. Merge your work: `$ git rebase -i origin/master`
 4. Clean history:
     * Squash related commits using `s`
     * Write meaningful commit name *and* description (separated by line
      break)
     * Try to be as detailed as possible to help **others** review your work
-4. Push to Github: `git push`
+4. Push to Github: `$ git push`
 5. Navigate to your local feature branch:
 https://github.com/hugolamarrephd/pymaat/tree/your-local-feature-branch
 6. Click *New pull request* and provide relevant information about your new
@@ -83,27 +83,25 @@ https://github.com/hugolamarrephd/pymaat/tree/your-local-feature-branch
 ## Tests
 * Grant execution permission:
     `$ chmod +x tests/run.py`
-* Running tests from command line:
+* Run tests from command line:
     `$ tests/run.py`
 
 ## Text Editor
 We strongly encourage to use vim as text editor. In any case, make sure:
 
-* each indentation level is separated by exactly 4 white spaces;
-* there is no trailing white spaces or end-of-lines at respectively the end of each line or the end of a file;
-* .py files respect [PEP8](https://www.python.org/dev/peps/pep-0008/);
+* Each indentation level is separated by exactly 4 white spaces;
+* There is no trailing white spaces or end-of-lines at respectively the end of each line or the end of a file;
+* `.py` files respect [PEP8](https://www.python.org/dev/peps/pep-0008/);
 
 before each commit.
 
 ### Vim config
 Here is basic `~/.vimrc` configuration to get you started:
-
-    * trailing spaces are highlighted in black;
-    * use `:tabe` to create new tabs and `<F7>` and `<F9>` to navigate;
-    * use `:vs` to make a vertical split (on wide screen) and `<CTRL-H>` and
-    `<CRTL-L>`
-    to navigate;
-    * press `<F5>` to automatically remove all trailing whitespaces;
+* trailing spaces are highlighted in black;
+* use `:tabe` to create new tabs and `<F7>` and `<F9>` to navigate;
+* use `:vs` to make a vertical split (on wide screen) and `<CTRL-H>` and
+`<CRTL-L>` to navigate;
+* press `<F5>` to automatically remove all trailing whitespaces;
 
 ```
 set nocp
