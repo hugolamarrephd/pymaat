@@ -49,8 +49,8 @@ generate a permanent **token** from *Settings>Developer settings>Personal access
     * Write meaningful commit name *and* description (separated by a line
      break)
     * Try to be as detailed as possible to help **others** review your work
-5. Push to Github: `$ git push`
-6. Navigate to your local feature branch:
+6. Push to Github: `$ git push -u origin your-feature-branch`
+7. Navigate to your local feature branch:
     https://github.com/hugolamarrephd/pymaat/tree/your-feature-branch
 8. Click *New pull request* and provide relevant information about your new
     feature (with base set to `master`)
