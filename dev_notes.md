@@ -8,7 +8,7 @@ Install [Cygwin64 Terminal](https://cygwin.com/install.html) and select all pack
     $ sudo apt-get install git python36
 
 ### Mac OS X
-Download [installer](https://www.python.org/ftp/python/3.6.3/python-3.6.3-macosx10.6.pkg) and follow instructions.
+Download [python](https://www.python.org/ftp/python/3.6.3/python-3.6.3-macosx10.6.pkg) and follow instructions.
 
 ## Git set-up
 ### Basic config
@@ -27,7 +27,7 @@ generate a permanent **token** from *Settings>Developer settings>Personal access
 
 ### Contrib guidelines
 #### Basic Workflow
-0. Create your feature branch: `git checkout -b your-local-feature-branch'
+0. Create your feature branch: `git checkout -b your-local-feature-branch`
 1. Always run `$ git diff ` before staging (or `$ git diff --staged` when ready to commit) and manually inspect changes.
 2. In particular, make sure there are no trailing whitespaces.
 3. Craft simple messages (no description) that help **you** identify each commit
@@ -45,8 +45,8 @@ generate a permanent **token** from *Settings>Developer settings>Personal access
 4. Push to Github: `git push`
 5. Navigate to your local feature branch:
 https://github.com/hugolamarrephd/pymaat/tree/your-local-feature-branch
-6. Click *New pull request* and provide relevant information about your
-feature (with base set to `master`)
+6. Click *New pull request* and provide relevant information about your new
+ feature (with base set to `master`)
 
 ## Setting-up virtualenvwrapper
 ### Installation
@@ -97,11 +97,14 @@ before each commit.
 
 ### Vim config
 Here is basic `~/.vimrc` configuration to get you started:
+
     * trailing spaces are highlighted in black;
-    * use `:tabe` to create new tabs and <F7>-<F9> to navigate;
-    * use `:vs` to make a vertical split (on wide screen) and <CTRL-H>-<CRTL-L>
+    * use `:tabe` to create new tabs and `<F7>` and `<F9>` to navigate;
+    * use `:vs` to make a vertical split (on wide screen) and `<CTRL-H>` and
+    `<CRTL-L>`
     to navigate;
-    * press <F5> to automatically remove all trailing whitespaces;
+    * press `<F5>` to automatically remove all trailing whitespaces;
+
 ```
 set nocp
 filetype off
