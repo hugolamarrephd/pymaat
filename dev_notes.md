@@ -32,7 +32,7 @@ generate a permanent **token** from *Settings>Developer settings>Personal access
 ### Contrib guidelines
 
 #### Basic workflow
-0. Create your feature branch: `$ git checkout -b your-local-feature-branch`
+0. Create your feature branch: `$ git checkout -b your-feature-branch`
 1. Always run `$ git diff ` before staging (or `$ git diff --staged` when ready to commit) and manually inspect changes.
 2. In particular, make sure there are no trailing whitespaces.
 3. Craft simple messages (no description) that help **you** identify each commit
@@ -40,7 +40,7 @@ generate a permanent **token** from *Settings>Developer settings>Personal access
 
 #### Pull requests to `master`
 0. Update repo: `$ git fetch`
-1. Be sure to be in feature branch: `$ git checkout your-local-feature-branch`
+1. Be sure to be in feature branch: `$ git checkout your-feature-branch`
 2. Double check **everything**: `$ git diff HEAD origin/master`
 3. Run tests: `tests/run.py`
 4. Merge your work: `$ git rebase -i origin/master`
@@ -51,10 +51,14 @@ generate a permanent **token** from *Settings>Developer settings>Personal access
     * Try to be as detailed as possible to help **others** review your work
 5. Push to Github: `$ git push`
 6. Navigate to your local feature branch:
-    https://github.com/hugolamarrephd/pymaat/tree/your-local-feature-branch
+    https://github.com/hugolamarrephd/pymaat/tree/your-feature-branch
 8. Click *New pull request* and provide relevant information about your new
     feature (with base set to `master`)
-
+9. Once merged, delete local and remote feature branch
+```
+$ git push -d your-feature-branch
+$ git branch -d your-feature-branch
+```
 ## Setting-up virtualenvwrapper
 
 ### Installation
