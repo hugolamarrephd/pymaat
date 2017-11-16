@@ -1,5 +1,7 @@
 # Guide for developers
+
 ## Developing on...
+
 ### Windows
 Install [Cygwin64 Terminal](https://cygwin.com/install.html) and select all packages.
 
@@ -8,15 +10,17 @@ Install [Cygwin64 Terminal](https://cygwin.com/install.html) and select all pack
     $ sudo apt-get install git python36
 
 ### Mac OS X
-Download [python](https://www.python.org/ftp/python/3.6.3/python-3.6.3-macosx10.6.pkg) and follow instructions.
+Download [python installer](https://www.python.org/ftp/python/3.6.3/python-3.6.3-macosx10.6.pkg) and follow instructions.
 
 ## Git set-up
+
 ### Basic config
 ```
     $ git config --global user.name "NAME"
     $ git config --global user.email "EMAIL@EXAMPLE.COM"
     $ git config --global credential.helper 'store --file ~/.git-credential'
 ```
+
 ### Cloning repo
 * First, set **pymaat** root path:
     `$ export PYMAAT_PATH=~/pymaat/`
@@ -26,29 +30,33 @@ Download [python](https://www.python.org/ftp/python/3.6.3/python-3.6.3-macosx10.
 generate a permanent **token** from *Settings>Developer settings>Personal access tokens* and use it in lieu of a password.
 
 ### Contrib guidelines
+
 #### Basic workflow
 0. Create your feature branch: `$ git checkout -b your-local-feature-branch`
 1. Always run `$ git diff ` before staging (or `$ git diff --staged` when ready to commit) and manually inspect changes.
 2. In particular, make sure there are no trailing whitespaces.
 3. Craft simple messages (no description) that help **you** identify each commit
 4. **Don't push feature branch until ready for pull request**
+
 #### Pull requests to `master`
 0. Update repo: `$ git fetch`
 1. Be sure to be in feature branch: `$ git checkout your-local-feature-branch`
 2. Double check **everything**: `$ git diff HEAD origin/master`
-3. Merge your work: `$ git rebase -i origin/master`
-4. Clean history:
+3. Run tests: `tests/run.py`
+4. Merge your work: `$ git rebase -i origin/master`
+5. Clean history:
     * Squash related commits using `s`
-    * Write meaningful commit name *and* description (separated by line
+    * Write meaningful commit name *and* description (separated by a line
      break)
     * Try to be as detailed as possible to help **others** review your work
-4. Push to Github: `$ git push`
-5. Navigate to your local feature branch:
-https://github.com/hugolamarrephd/pymaat/tree/your-local-feature-branch
-6. Click *New pull request* and provide relevant information about your new
- feature (with base set to `master`)
+5. Push to Github: `$ git push`
+6. Navigate to your local feature branch:
+    https://github.com/hugolamarrephd/pymaat/tree/your-local-feature-branch
+8. Click *New pull request* and provide relevant information about your new
+    feature (with base set to `master`)
 
 ## Setting-up virtualenvwrapper
+
 ### Installation
 ```
     $ python3.6 -m pip install virtualenvwrapper
@@ -56,12 +64,14 @@ https://github.com/hugolamarrephd/pymaat/tree/your-local-feature-branch
     $ source $(find / -type f -name virtualenvwrapper.sh -print -quit)
     $ mkvirtualenv pymaat
 ```
+
 ### Dependencies
 ```
     $ workon pymaat
     $ cd $PYMAAT_PATH
     $ pip install -r requirements.txt
 ```
+
 ## Bash set-up (in `~/.bash_profile`)
 1. Set **pymaat** root path;
 2. Add root to python path;
@@ -80,6 +90,7 @@ https://github.com/hugolamarrephd/pymaat/tree/your-local-feature-branch
     fi
     workon pymaat
 ```
+
 ## Tests
 * Grant execution permission:
     `$ chmod +x tests/run.py`
@@ -96,12 +107,12 @@ We strongly encourage to use vim as text editor. In any case, make sure:
 before each commit.
 
 ### Vim config
-Here is basic `~/.vimrc` configuration to get you started:
-* trailing spaces are highlighted in black;
-* use `:tabe` to create new tabs and `<F7>` and `<F9>` to navigate;
-* use `:vs` to make a vertical split (on wide screen) and `<CTRL-H>` and
+Here is a basic `~/.vimrc` configuration to get you started:
+* Trailing spaces are highlighted in black;
+* Use `:tabe` to create new tabs and `<F7>` and `<F9>` to navigate;
+* Use `:vs` to make a vertical split (on wide screen) and `<CTRL-H>` and
 `<CRTL-L>` to navigate;
-* press `<F5>` to automatically remove all trailing whitespaces;
+* Press `<F5>` to automatically remove all trailing whitespaces;
 
 ```
 set nocp
