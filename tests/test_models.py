@@ -9,6 +9,27 @@ class TestGarchFilters(unittest.TestCase):
     def setUp(self):
         self.model = p.Garch()
 
+    def test_filter_len2_tuple(self):
+        out = self.model.filter(NORM_RAND,1e-7)
+        self.assertIsInstance(out,tuple)
+        self.assertEqual(len(out),2)
+
+    def test_filter_size(self):
+        out = self.model.filter(NORM_RAND,1e-7)
+        s = NORM_RAND.shape
+        self.assertEqual(out[0].shape,(s[0]+1,)+s[1:]) # variance
+        self.assertEqual(out[1].shape,s) # innovations
+
+    def test_filter_positive_variance(self):
+        (h,*_) = self.model.filter(NORM_RAND,1e-7)
+        np.testing.assert_array_equal(h>0,True)
+
+    def test_filter_throws_exception_when_non_positive_variance(self):
+        with self.assertRaises(ValueError):
+            self.model.filter(NORM_RAND,-1)
+        with self.assertRaises(ValueError):
+            self.model.filter(NORM_RAND,0)
+
     def test_one_step_filter_len2_tuple(self):
         out = self.model.one_step_filter(NORM_RAND, GAM_RAND)
         self.assertIsInstance(out,tuple)
@@ -50,6 +71,13 @@ class TestGarchFilters(unittest.TestCase):
         )
         np.testing.assert_allclose(sim_nvar,filter_nvar)
         np.testing.assert_allclose(innovations,filter_innov)
+
+    def test_neg_log_like_at_few_values(self):
+        nll = self.model.negative_log_likelihood(1,1)
+        self.assertAlmostEqual(nll,0.5)
+        nll = self.model.negative_log_likelihood(0,np.exp(1))
+        self.assertAlmostEqual(nll,0.5)
+
 
 
 # Hard-code random sample to avoid test randomness
