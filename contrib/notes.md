@@ -49,8 +49,8 @@ generate a permanent **token** from *Settings>Developer settings>Personal access
     * Write meaningful commit name *and* description (separated by a line
      break)
     * Try to be as detailed as possible to help **others** review your work
-5. Push to Github: `$ git push`
-6. Navigate to your local feature branch:
+6. Push to Github: `$ git push -u origin your-feature-branch`
+7. Navigate to your local feature branch:
     https://github.com/hugolamarrephd/pymaat/tree/your-feature-branch
 8. Click *New pull request* and provide relevant information about your new
     feature (with base set to `master`)
@@ -86,9 +86,9 @@ $ git branch -d your-feature-branch
     export PYMAAT_PATH=~/pymaat/
     export PYTHONPATH=$PYTHONPATH:$PYMAAT_PATH
     export VIRTUALENVWRAPPER_PYTHON=$(which python3.6)
-    venv_path=$(find /usr -type f -name virtualenvwrapper.sh -print -quit)
-    if [[ -r venv_path ]]; then
-        source venv_path
+    venv_path=$(find / -type f -name virtualenvwrapper.sh -print -quit)
+    if [[ -r $venv_path ]]; then
+        source $venv_path
     else
         echo "WARNING: Can't find virtualenvwrapper.sh"
     fi
