@@ -66,14 +66,14 @@ $ git branch -d your-feature-branch
     $ python3.6 -m pip install virtualenvwrapper
     $ export VIRTUALENVWRAPPER_PYTHON=$(which python3.6)
     $ source $(find / -type f -name virtualenvwrapper.sh -print -quit)
-    $ mkvirtualenv pymaat
+    $ mkvirtualenv pymaat -p $VIRTUALENVWRAPPER_PYTHON
 ```
 
 ### Dependencies
 ```
     $ workon pymaat
     $ cd $PYMAAT_PATH
-    $ pip install -r requirements.txt
+    $ pip install -r requirements.txt -r contrib/requirements.txt
 ```
 
 ## Bash set-up (in `~/.bash_profile`)
@@ -101,7 +101,17 @@ $ git branch -d your-feature-branch
 * Run tests from command line:
     `$ tests/run.py`
 
-## Text Editor
+
+## Coding and Style
+
+### Docstrings
+The [NumPy
+style](https://github.com/numpy/numpy/blob/master/doc/HOWTO_DOCUMENT.rst.txt)
+must be used. See also
+[reStructuredText
+quickref](http://docutils.sourceforge.net/docs/user/rst/quickref.html).
+
+### Text editor
 We strongly encourage to use vim as text editor. In any case, make sure:
 
 * Each indentation level is separated by exactly 4 white spaces;
@@ -116,8 +126,20 @@ Here is a basic `~/.vimrc` configuration to get you started:
 * Use `:tabe` to create new tabs and `<F7>` and `<F9>` to navigate;
 * Use `:vs` to make a vertical split (on wide screen) and `<CTRL-H>` and
 `<CRTL-L>` to navigate;
-* Press `<F5>` to automatically remove all trailing whitespaces;
-
+* Press `<F5>` to apply PEP8;
+* Press `<F8>` to run tests;
+* Press `<F10>` to open source attached to tests;
+* [flake8](https://github.com/nvie/vim-flake8/blob/master/README.mdown)
+    1. Install [vim-pathogen](https://github.com/tpope/vim-pathogen)
+        ```
+        mkdir -p ~/.vim/autoload ~/.vim/bundle && \
+        curl -LSso ~/.vim/autoload/pathogen.vim https://tpo.pe/pathogen.vim
+        ```
+    2. `git clone https://github.com/nvie/vim-flake8/ ~/.vim/bundle`
+* [pyunit](https://github.com/nvie/vim-pyunit/blob/develop/README.rst)
+    1. `git clone git://github.com/nvie/vim-pyunit.git`
+    2. `mkdir -p ~/.vim/ftplugin`
+    3. `cp vim-pyunit/ftplugin/python_pyunit.vim ~./vim/ftplugin`
 ```
 set nocp
 filetype off
@@ -138,8 +160,8 @@ nnoremap <C-l> :wincmd l<CR>
 highlight BadWhitespace ctermbg=black guibg=black
 au BufRead,BufNewFile * match BadWhitespace /\s\+$/
 
-"Use <F5> to remove all trailing whitespaces
-nnoremap <silent> <F5>
+"Automatically remove all trailing whitespaces
+autocmd BufWritePost *
 \:let _s=@/<Bar>
 \:%s/\s\+$//e<Bar>
 \:let @/=_s<Bar>
@@ -147,6 +169,10 @@ nnoremap <silent> <F5>
 \:unlet _s <Bar>
 \:%s/\($\n\s*\)\+\%$//e<Bar>
 \<CR>
+
+"Re-map Flake8 to <F5>
+autocmd FileType python map <buffer> <F5> :call Flake8()<CR>
+autocmd BufWritePost *.py call Flake8()
 
 " Basic PEP 8
 au BufNewFile,BufRead *
@@ -157,6 +183,10 @@ au BufNewFile,BufRead *
     \ set expandtab |
     \ set autoindent |
     \ set fileformat=unix |
+
+" Open test source if not open already
+noremap <F10> :call PyUnitSwitchToCounterpart()<CR>
+noremap! <F10> <Esc>:call PyUnitSwitchToCounterpart()<CR>
 
 "Show line numbers
 set nu
