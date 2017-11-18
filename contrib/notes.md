@@ -139,7 +139,7 @@ Here is a basic `~/.vimrc` configuration to get you started:
 * [pyunit](https://github.com/nvie/vim-pyunit/blob/develop/README.rst)
     1. `git clone git://github.com/nvie/vim-pyunit.git`
     2. `mkdir -p ~/.vim/ftplugin`
-    3. `cp vim-pyunit/ftplugin/python_pyunit.vim ~./vim/ftplugin`
+    3. `cp vim-pyunit/ftplugin/python_pyunit.vim ~/.vim/ftplugin`
 ```
 set nocp
 filetype off
