@@ -1,16 +1,4 @@
-# Guide for developers
-
-## Developing on...
-
-### Windows
-Install [Cygwin64 Terminal](https://cygwin.com/install.html) and select all packages.
-
-### Ubuntu
-    $ sudo add-apt-repository ppa:fkrull/deadsnakes
-    $ sudo apt-get install git python36
-
-### Mac OS X
-Download [python installer](https://www.python.org/ftp/python/3.6.3/python-3.6.3-macosx10.6.pkg) and follow instructions.
+# Guide for Developers and Contributors
 
 ## Git set-up
 
@@ -34,7 +22,8 @@ generate a permanent **token** from *Settings>Developer settings>Personal access
 #### Basic workflow
 0. Create your feature branch: `$ git checkout -b your-feature-branch`
 1. Always run `$ git diff ` before staging (or `$ git diff --staged` when ready to commit) and manually inspect changes.
-2. In particular, make sure there are no trailing whitespaces.
+2. In particular, make sure there are no trailing whitespaces and you use
+   UNIX-style end-of-lines.
 3. Craft simple messages (no description) that help **you** identify each commit
 4. **Don't push feature branch until ready for pull request**
 
@@ -73,7 +62,7 @@ $ git branch -d your-feature-branch
 ```
     $ workon pymaat
     $ cd $PYMAAT_PATH
-    $ pip install -r requirements.txt -r contrib/requirements.txt
+    $ pip install -r requirements.txt
 ```
 
 ## Bash set-up (in `~/.bash_profile`)
@@ -107,7 +96,7 @@ $ git branch -d your-feature-branch
 ### Docstrings
 The [NumPy
 style](https://github.com/numpy/numpy/blob/master/doc/HOWTO_DOCUMENT.rst.txt)
-must be used. See also
+must be used when writting comments. See also
 [reStructuredText
 quickref](http://docutils.sourceforge.net/docs/user/rst/quickref.html).
 
@@ -121,25 +110,12 @@ We strongly encourage to use vim as text editor. In any case, make sure:
 before each commit.
 
 ### Vim config
-Here is a basic `~/.vimrc` configuration to get you started:
+Here is a very basic `~/.vimrc` configuration to get you started:
 * Trailing spaces are highlighted in black;
 * Use `:tabe` to create new tabs and `<F7>` and `<F9>` to navigate;
 * Use `:vs` to make a vertical split (on wide screen) and `<CTRL-H>` and
 `<CRTL-L>` to navigate;
-* Press `<F5>` to apply PEP8;
-* Press `<F8>` to run tests;
-* Press `<F10>` to open source attached to tests;
-* [flake8](https://github.com/nvie/vim-flake8/blob/master/README.mdown)
-    1. Install [vim-pathogen](https://github.com/tpope/vim-pathogen)
-        ```
-        mkdir -p ~/.vim/autoload ~/.vim/bundle && \
-        curl -LSso ~/.vim/autoload/pathogen.vim https://tpo.pe/pathogen.vim
-        ```
-    2. `git clone https://github.com/nvie/vim-flake8/ ~/.vim/bundle`
-* [pyunit](https://github.com/nvie/vim-pyunit/blob/develop/README.rst)
-    1. `git clone git://github.com/nvie/vim-pyunit.git`
-    2. `mkdir -p ~/.vim/ftplugin`
-    3. `cp vim-pyunit/ftplugin/python_pyunit.vim ~/.vim/ftplugin`
+* Automatically remove all trailing whitespaces on save
 ```
 set nocp
 filetype off
@@ -155,8 +131,7 @@ nnoremap <C-j> :wincmd j<CR>
 nnoremap <C-k> :wincmd k<CR>
 nnoremap <C-l> :wincmd l<CR>
 
-"Highligh trailing whitespace in py files
-
+"Highligh trailing whitespaces
 highlight BadWhitespace ctermbg=black guibg=black
 au BufRead,BufNewFile * match BadWhitespace /\s\+$/
 
@@ -170,11 +145,7 @@ autocmd BufWritePost *
 \:%s/\($\n\s*\)\+\%$//e<Bar>
 \<CR>
 
-"Re-map Flake8 to <F5>
-autocmd FileType python map <buffer> <F5> :call Flake8()<CR>
-autocmd BufWritePost *.py call Flake8()
-
-" Basic PEP 8
+" Basic formatting
 au BufNewFile,BufRead *
     \ set tabstop=4 |
     \ set softtabstop=4 |
@@ -183,14 +154,4 @@ au BufNewFile,BufRead *
     \ set expandtab |
     \ set autoindent |
     \ set fileformat=unix |
-
-" Open test source if not open already
-noremap <F10> :call PyUnitSwitchToCounterpart()<CR>
-noremap! <F10> <Esc>:call PyUnitSwitchToCounterpart()<CR>
-
-"Show line numbers
-set nu
-
-"Highlight matches
-set hls is
 ```
