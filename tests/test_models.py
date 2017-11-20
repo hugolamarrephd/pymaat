@@ -46,7 +46,7 @@ class TestGarchFilters(unittest.TestCase):
 
     def test_simulate_revertsto_filter(self):
         innov_ts = self.randn
-        first_var = 1e-7
+        first_var = 1e-4
         (sim_var_ts, sim_ret_ts) = self.model.simulate(innov_ts, first_var)
         (fil_var_ts, fil_innov_ts) = self.model.filter(sim_ret_ts, first_var)
         np.testing.assert_allclose(sim_var_ts, fil_var_ts)
@@ -61,19 +61,19 @@ class TestGarchFilters(unittest.TestCase):
         np.testing.assert_allclose(innov, fil_innov)
 
     def test_filter_len2_tuple(self):
-        out = self.model.filter(self.randn, 1e-7)
+        out = self.model.filter(self.randn, 1e-4)
         self.assertIsInstance(out, tuple)
         self.assertEqual(len(out), 2)
 
     def test_filter_size(self):
-        var, innov = self.model.filter(self.randn, 1e-7)
+        var, innov = self.model.filter(self.randn, 1e-4)
         expected_var_shape = (self.shape[0]+1,) + self.shape[1:]
         expected_innov_shape = self.shape
         self.assertEqual(var.shape, expected_var_shape)
         self.assertEqual(innov.shape, expected_innov_shape)
 
     def test_filter_positive_variance(self):
-        (h,*_) = self.model.filter(self.randn, 1e-7)
+        (h,*_) = self.model.filter(self.randn, 1e-4)
         np.testing.assert_array_equal(h>0, True)
 
     def test_filter_throws_exception_when_non_positive_variance(self):
@@ -83,19 +83,19 @@ class TestGarchFilters(unittest.TestCase):
             self.model.filter(self.randn, 0)
 
     def test_simulate_len2_tuple(self):
-        out = self.model.simulate(self.randn, 1e-7)
+        out = self.model.simulate(self.randn, 1e-4)
         self.assertIsInstance(out, tuple)
         self.assertEqual(len(out), 2)
 
     def test_simulate_size(self):
-        var, ret = self.model.simulate(self.randn, 1e-7)
+        var, ret = self.model.simulate(self.randn, 1e-4)
         expected_var_shape = (self.shape[0]+1,) + self.shape[1:]
         expected_ret_shape = self.shape
         self.assertEqual(var.shape, expected_var_shape)
         self.assertEqual(ret.shape, expected_ret_shape)
 
     def test_simulate_positive_variance(self):
-        (h,*_) = self.model.simulate(self.randn, 1e-7)
+        (h,*_) = self.model.simulate(self.randn, 1e-4)
         np.testing.assert_array_equal(h>0, True)
 
     def test_simulate_throws_exception_when_non_positive_variance(self):
@@ -164,12 +164,39 @@ class TestGarchFilters(unittest.TestCase):
                 + self.model.beta
                 + self.model.alpha * self.model.gamma ** 2)
 
-
     def test_neg_log_like_at_few_values(self):
         nll = self.model.negative_log_likelihood(1, 1)
         self.assertAlmostEqual(nll, 0.5)
         nll = self.model.negative_log_likelihood(0, np.exp(1))
         self.assertAlmostEqual(nll, 0.5)
+
+    def test_one_step_roots_when_valid(self):
+        var = 1e-4
+        lowest_next_var = self.model.get_lowest_next_variance(var)
+        next_var = lowest_next_var + 1e-5
+        roots = self.model.one_step_roots(var, next_var)
+        next_var_left, *_ = self.model.one_step_simulate(roots[0], var)
+        next_var_right, *_ = self.model.one_step_simulate(roots[1], var)
+        self.assertAlmostEqual(next_var_left, next_var)
+        self.assertAlmostEqual(next_var_right, next_var)
+
+    def test_one_step_roots_left_right_order(self):
+        var = 1e-4
+        lowest_next_var = self.model.get_lowest_next_variance(var)
+        next_var = lowest_next_var + 1e-5
+        roots = self.model.one_step_roots(var, next_var)
+        self.assertTrue(roots[0]<roots[1])
+
+    def test_roots_raise_exception_when_at_or_below_lowest(self):
+        var = 1e-4
+        at_singularity = self.model.get_lowest_next_variance(var)
+        with self.assertRaises(ValueError):
+            self.model.one_step_roots(var, at_singularity)
+
+        impossible_var = at_singularity - 1e-5
+        with self.assertRaises(ValueError):
+            self.model.one_step_roots(var, impossible_var)
+
 
 class TestGarchQuantizer(unittest.TestCase):
 
@@ -181,7 +208,7 @@ class TestGarchQuantizer(unittest.TestCase):
             gamma=196.21)
 
     init_innov = np.array(
-        [[ 0.63466271,  1.31646684,  1.57076979, -1.48338134, -0.67547033,
+       [[ 0.63466271,  1.31646684,  1.57076979, -1.48338134, -0.67547033,
         -0.94501199, -1.7518655 ,  1.24787024, -0.24152209, -0.83622565],
        [-0.0116054 , -0.12164961,  0.35902844,  1.98817555, -0.93355169,
          0.53536977, -0.93841577, -2.26992583,  1.30517792,  0.1969917 ],
@@ -192,9 +219,29 @@ class TestGarchQuantizer(unittest.TestCase):
        [-1.05173776, -0.216082  ,  0.02929778,  0.26620765,  1.88502435,
         -0.6491563 ,  0.29142118,  0.35421171, -0.49258563,  1.45412617]])
 
+    n_per = init_innov.shape[0]+1
+    n_quant = init_innov.shape[1]
 
     def setUp(self):
         self.quant = pymaat.models.Quantizer(
                 self.model,
                 self.init_innov,
-                1e-7)
+                1e-4)
+
+    def test_initialization_has_consistent_size(self):
+        self.assertEqual(self.quant.n_per, self.n_per)
+        self.assertEqual(self.quant.n_quant, self.n_quant)
+        self.assertEqual(self.quant.gamma.shape,
+                (self.n_per, self.n_quant))
+        self.assertEqual(self.quant.voronoi.shape,
+                (self.n_per, self.n_quant-1))
+
+    def test_quantizer_initialization_is_sorted(self):
+        np.testing.assert_array_equal(
+                np.diff(self.quant.gamma[0])==0, True)
+        np.testing.assert_array_equal(
+                np.diff(self.quant.voronoi[0])==0, True)
+        np.testing.assert_array_equal(
+                np.diff(self.quant.gamma[1:])>0, True)
+        np.testing.assert_array_equal(
+                np.diff(self.quant.voronoi[1:])>0, True)

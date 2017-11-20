@@ -46,6 +46,18 @@ class Garch():
             np.power(innov-self.gamma * vol,2) )
         return (next_var, ret)
 
+    def one_step_roots(self, var, next_var):
+        if np.any(next_var<=self.get_lowest_next_variance(var)):
+            raise ValueError
+        d = np.sqrt((next_var - self.omega - self.beta*var) / self.alpha)
+        a = self.gamma * np.sqrt(var)
+        innov_left = a-d
+        innov_right = a+d
+        return (innov_left, innov_right)
+
+    def get_lowest_next_variance(self, var):
+        return self.omega + self.beta * var
+
     def negative_log_likelihood(self, innov, var):
         return 0.5 * (np.power(innov, 2) + np.log(var))
 
@@ -62,17 +74,31 @@ class Garch():
         return var_ts
 
 class Quantizer():
-    def __init__(model, init_innov, first_var):
+    def __init__(self, model, init_innov, first_var):
         self.model = model
 
         if init_innov.ndim == 2:
-            self.n_per = init_innov.shape[0]
+            self.n_per = init_innov.shape[0]+1
             self.n_quant = init_innov.shape[1]
         else:
             raise ValueError
 
-        (self.gamma,*_) = self.model.simulate(init_innov, first_var).sort()
+        (h,*_) = self.model.simulate(init_innov, first_var)
+        self._set_gamma(h)
+        #TODO set initial transition probas
 
-    def compute(self):
+    def quantize(self):
         pass
+
+    def _set_gamma(self, gamma, t=None):
+        if t is None:
+            self.gamma = gamma
+            self.gamma.sort()
+            self.voronoi = self.gamma[:,:-1] + np.diff(self.gamma)
+        else:
+            self.gamma[t,:] = gamma
+            self.gamma[t,:].sort()
+            self.voronoi[t,:] = self.gamma[t,:-1] + np.diff(self.gamma[t,:])
+
+
 
