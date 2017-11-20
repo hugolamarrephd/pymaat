@@ -1,7 +1,7 @@
 import numpy as np
 
 class Garch():
-    def __init__(self, mu=2, omega=1e-7, alpha=1e-7, beta=0.8, gamma=100):
+    def __init__(self, mu, omega, alpha, beta, gamma):
         self.mu = mu
         self.omega = omega
         self.alpha = alpha

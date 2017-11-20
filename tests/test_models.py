@@ -7,7 +7,13 @@ import pymaat.models as p
 
 class TestGarchFilters(unittest.TestCase):
     def setUp(self):
-        self.model = p.Garch()
+        self.model = p.Garch(
+                mu=2.01,
+                omega=9.75e-20,
+                alpha=4.54e-6,
+                beta=0.79,
+                gamma=196.21
+                )
 
     def test_filter_len2_tuple(self):
         out = self.model.filter(NORM_RAND,1e-7)
