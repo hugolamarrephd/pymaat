@@ -1,4 +1,5 @@
 import numpy as np
+import scipy.optimize
 
 class Garch():
     def __init__(self, mu, omega, alpha, beta, gamma):
@@ -47,17 +48,19 @@ class Garch():
         return (next_var, ret)
 
     def one_step_roots(self, var, next_var):
-        if np.any(next_var<=self.get_lowest_next_variance(var)):
-            raise ValueError
         d = np.sqrt((next_var - self.omega - self.beta*var) / self.alpha)
         a = self.gamma * np.sqrt(var)
         innov_left = a-d
         innov_right = a+d
         return (innov_left, innov_right)
 
-    def get_lowest_next_variance(self, var):
+    def one_step_has_roots(self, var, next_var):
+        return next_var<=self._get_lowest_one_step_variance(var)
+
+    def _get_lowest_one_step_variance(self, var):
         return self.omega + self.beta * var
 
+    # TODO Send to estimator
     def negative_log_likelihood(self, innov, var):
         return 0.5 * (np.power(innov, 2) + np.log(var))
 
@@ -83,22 +86,27 @@ class Quantizer():
         else:
             raise ValueError
 
-        (h,*_) = self.model.simulate(init_innov, first_var)
-        self._set_gamma(h)
+        (self.gamma,*_) = self.model.simulate(init_innov, first_var)
+        self.gamma.sort()
+        self.voronoi = self._get_voronoi(self.gamma)
         #TODO set initial transition probas
 
     def quantize(self):
         pass
 
-    def _set_gamma(self, gamma, t=None):
-        if t is None:
-            self.gamma = gamma
-            self.gamma.sort()
-            self.voronoi = self.gamma[:,:-1] + np.diff(self.gamma)
-        else:
-            self.gamma[t,:] = gamma
-            self.gamma[t,:].sort()
-            self.voronoi[t,:] = self.gamma[t,:-1] + np.diff(self.gamma[t,:])
+    def _one_step_quantize(self, prev_proba, trans_proba, init_gamma):
+        opt = scipy.optimize.root(fun, init_gamma)
 
+    def _gradient(self, prev_gamma, prev_proba, trans_proba, gamma):
+        voronoi = self._get_voronoi(gamma)
+        z = self.model.one_step_roots(
+                np.reshape(prev_gamma, (self.n_quant, 1)),
+                np.reshape(voronoi, (1, self.n_quant)))
 
+    def _integral(self, prev_gamma):
+        pass
 
+    @staticmethod
+    def _get_voronoi(gamma):
+        left_pad = np.zeros((gamma.shape[0],1))
+        return np.hstack((left_pad, gamma[:,:-1] + 0.5*np.diff(gamma)))

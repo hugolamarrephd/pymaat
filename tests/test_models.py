@@ -104,6 +104,22 @@ class TestGarchFilters(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.model.simulate(self.randn, 0)
 
+    def test_all_one_step_funcs_support_broadcasting(self):
+        in1 = np.array([[1,2,3]])
+        in2 = np.array([[1],[2]])
+        all_one_step_funcs = [
+                lambda: self.model.one_step_filter(in1, in2),
+                lambda: self.model.one_step_simulate(in1, in2),
+                lambda: self.model.one_step_has_roots(in1, in2),
+                lambda: self.model.one_step_roots(in1, in2)]
+        for f in all_one_step_funcs:
+            out = f()
+            if isinstance(out, tuple):
+                for o in out:
+                    self.assertEqual(o.shape, (2,3))
+            else:
+                self.assertEqual(out.shape, (2,3))
+
     def test_one_step_filter_len2_tuple(self):
         out = self.model.one_step_filter(self.randn, self.randg)
         self.assertIsInstance(out, tuple)
@@ -172,7 +188,7 @@ class TestGarchFilters(unittest.TestCase):
 
     def test_one_step_roots_when_valid(self):
         var = 1e-4
-        lowest_next_var = self.model.get_lowest_next_variance(var)
+        lowest_next_var = self.model._get_lowest_one_step_variance(var)
         next_var = lowest_next_var + 1e-5
         roots = self.model.one_step_roots(var, next_var)
         next_var_left, *_ = self.model.one_step_simulate(roots[0], var)
@@ -182,20 +198,20 @@ class TestGarchFilters(unittest.TestCase):
 
     def test_one_step_roots_left_right_order(self):
         var = 1e-4
-        lowest_next_var = self.model.get_lowest_next_variance(var)
+        lowest_next_var = self.model._get_lowest_one_step_variance(var)
         next_var = lowest_next_var + 1e-5
         roots = self.model.one_step_roots(var, next_var)
         self.assertTrue(roots[0]<roots[1])
 
-    def test_roots_raise_exception_when_at_or_below_lowest(self):
+    def test_roots_nan_when_below_lowest(self):
         var = 1e-4
-        at_singularity = self.model.get_lowest_next_variance(var)
-        with self.assertRaises(ValueError):
-            self.model.one_step_roots(var, at_singularity)
-
+        at_singularity = self.model._get_lowest_one_step_variance(var)
+        roots = self.model.one_step_roots(var, at_singularity)
+        self.assertAlmostEqual(roots[0],roots[1])
         impossible_var = at_singularity - 1e-5
-        with self.assertRaises(ValueError):
-            self.model.one_step_roots(var, impossible_var)
+        np.testing.assert_equal(
+                self.model.one_step_roots(var, impossible_var),
+                (np.nan, np.nan))
 
 
 class TestGarchQuantizer(unittest.TestCase):
@@ -234,14 +250,24 @@ class TestGarchQuantizer(unittest.TestCase):
         self.assertEqual(self.quant.gamma.shape,
                 (self.n_per, self.n_quant))
         self.assertEqual(self.quant.voronoi.shape,
-                (self.n_per, self.n_quant-1))
+                (self.n_per, self.n_quant))
 
-    def test_quantizer_initialization_is_sorted(self):
+    def test_init_first_step(self):
         np.testing.assert_array_equal(
-                np.diff(self.quant.gamma[0])==0, True)
+                np.diff(self.quant.gamma[0,1:])==0, True)
         np.testing.assert_array_equal(
-                np.diff(self.quant.voronoi[0])==0, True)
+                np.diff(self.quant.voronoi[0,1:])==0, True)
+
+    def test_init_is_sorted_other_steps(self):
         np.testing.assert_array_equal(
                 np.diff(self.quant.gamma[1:])>0, True)
         np.testing.assert_array_equal(
                 np.diff(self.quant.voronoi[1:])>0, True)
+
+    def test_get_voronoi(self):
+        v = self.quant._get_voronoi(np.array(
+                [[1,2,3,4,5],
+                [6,7,8,9,10]]))
+        np.testing.assert_almost_equal(v, np.array(
+                [[0,1.5,2.5,3.5,4.5],
+                [0,6.5,7.5,8.5,9.5]]))
