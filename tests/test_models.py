@@ -6,18 +6,10 @@ from scipy.stats import norm
 
 import pymaat.models
 
-class TestGarchParam(unittest.TestCase):
-    def test_invalid_param_raise_exception(self):
-        with self.assertRaises(ValueError):
-            pymaat.models.Garch(
-                mu=0,
-                omega=0,
-                alpha=0.5,
-                beta=0.5,
-                gamma=1)
 
-class TestGarchFilters(unittest.TestCase):
-    randn = np.array(
+class TestTimeseriesGarchFixture():
+
+    __innovations = np.array(
             [[[ 0.31559906, -1.80551443, -0.49468605, -1.04842416],
             [ 1.47092134, -0.18375408,  0.61439572,  0.64938352]],
 
@@ -27,7 +19,9 @@ class TestGarchFilters(unittest.TestCase):
            [[-0.22774868,  0.74240245,  1.11521215,  1.10464703],
             [-0.56968483,  0.54138324, -0.69508153, -0.14254879]]])
 
-    randg = np.array(
+    __returns = __innovations * np.sqrt(1e-4) + 1e-3
+
+    __variances =  1e-4 * np.array(
             [[[ 3.40880883,  1.50217308,  1.11125856,  0.14462167],
             [ 0.08321133,  0.36507093,  1.52133949,  1.42666615]],
 
@@ -37,7 +31,250 @@ class TestGarchFilters(unittest.TestCase):
            [[ 0.78179542,  1.32126548,  1.64830936,  1.59253612],
             [ 0.21397881,  0.01596482,  2.48993567,  1.3034988 ]]])
 
-    shape = randg.shape
+    __first_variance = __variances[0]
+
+    __shape = __innovations.shape
+
+    def timeseries_filter(self,returns=__returns):
+        return self.model.timeseries_filter(
+                returns,
+                self.__first_variance)
+
+    def timeseries_simulate(self, innovations=__innovations):
+        return self.model.timeseries_simulate(
+                innovations,
+                self.__first_variance)
+
+    def test_simulate_revertsto_filter(self):
+        simulated_variances, simulated_returns = self.timeseries_simulate()
+        filtered_variances, filtered_innovations = \
+                self.timeseries_filter(returns=simulated_returns)
+        np.testing.assert_allclose(simulated_variances, filtered_variances)
+        np.testing.assert_allclose(self.__innovations, filtered_innovations)
+
+    def test_initialize_variance(self):
+        pass
+
+    def test_filter_size(self):
+        next_variances, innovations = self.timeseries_filter()
+        self.assertEqual(
+                next_variances.shape,
+                (self.__shape[0]+1,) + self.__shape[1:])
+        self.assertEqual(innovations.shape, self.__shape)
+
+    def test_filter_positive_variance(self):
+        variances,_ = self.timeseries_filter()
+        np.testing.assert_array_equal(variances>0, True)
+
+    def test_filter_throws_exception_when_non_positive_variance(self):
+        with self.assertRaises(ValueError):
+            self.model.timeseries_filter(np.nan, -1)
+        with self.assertRaises(ValueError):
+            self.model.timeseries_filter(np.nan, 0)
+
+    def test_simulate_size(self):
+        variances, returns = self.timeseries_simulate()
+        self.assertEqual(variances.shape, (self.__shape[0]+1,) + self.__shape[1:])
+        self.assertEqual(returns.shape, self.__shape)
+
+    def test_simulate_positive_variance(self):
+        variances,_ = self.timeseries_simulate()
+        np.testing.assert_array_equal(variances>0, True)
+
+    def test_simulate_throws_exception_when_non_positive_variance(self):
+        with self.assertRaises(ValueError):
+            self.model.timeseries_simulate(np.nan, -1)
+        with self.assertRaises(ValueError):
+            self.model.timeseries_simulate(np.nan, 0)
+
+class TestOneStepGarchFixture():
+
+    __innovations = np.array(
+            [[[ 0.36841639, -0.57224794,  0.25019277, -1.24721141],
+            [ 1.35128646, -0.92096528, -0.92572966, -0.98178342],
+            [-0.84366922, -1.28207108, -1.53467485, -0.22874378]],
+
+            [[-1.05050049, -1.31158806, -1.17961533,  0.05363092],
+            [-1.67960499,  0.02364286,  0.28870878,  0.01871441],
+            [ 1.71135472,  0.7167683 , -0.93715744, -0.8482234 ]]])
+
+    __returns = __innovations * np.sqrt(1e-4) + 1e-3
+
+    __variances =  1e-4 * np.array(
+            [[[ 0.3217341 ,  0.00868056,  1.22722262,  0.58144423],
+            [ 0.54204103,  3.68888772,  0.77486123,  0.95989976],
+            [ 0.90888372,  0.07370864,  2.91764007,  2.21766175]],
+
+            [[ 0.7019393 ,  2.38621637,  1.24599797,  1.17731278],
+            [ 0.81830769,  0.26109424,  0.2980641 ,  0.85817885],
+            [ 0.93831248,  0.17303652,  0.45056502,  2.22328546]]])
+
+    __shape = __innovations.shape
+
+    __innovations_broadcast = np.array([[-0.70687441],
+            [ 0.72613442],
+            [-2.20412955],
+            [-0.27571779],
+            [ 1.38167603],
+            [-0.96744496],
+            [-0.05243877],
+            [-0.41254891],
+            [-1.27985463],
+            [ 0.12262462]])
+
+    __variances_broadcast =  1e-4 * np.array([[ 2.70588279,  0.96680575,
+            0.09027765, 1.23017577,  1.14468471]])
+
+    __shape_broadcast = (__innovations_broadcast.shape[0],
+            __variances_broadcast.shape[1])
+
+    # I/O
+
+    def get_one_step_funcs(self):
+        return [self.model.one_step_filter,
+               self.model.one_step_simulate,
+               self.model.one_step_has_roots,
+               self.model.one_step_roots,
+               self.model.one_step_integrate_until_innov]
+
+    def test_all_funcs_support_scalar(self):
+        allowed_primitives = (bool, float)
+        for f in self.get_one_step_funcs():
+        # Actual inputs do not matter here
+        # Only testing shapes...
+            out = f(np.nan, np.nan)
+            if isinstance(out, tuple):
+                for o in out:
+                    self.assertTrue(type(o) in allowed_primitives,
+                            msg = 'Type was: {}'.format(type(o)))
+            else:
+                self.assertTrue(type(out) in allowed_primitives,
+                            msg = 'Type was: {}'.format(type(o)))
+
+    def test_all_funcs_support_array(self):
+        for f in self.get_one_step_funcs():
+        # Actual inputs do not matter here
+        # Only testing shapes...
+            out = f(self.__innovations, self.__variances)
+            if isinstance(out, tuple):
+                for o in out:
+                    self.assertEqual(o.shape, self.__shape)
+            else:
+                self.assertEqual(out.shape, self.__shape)
+
+    def test_all_one_step_funcs_support_broadcasting(self):
+        for f in self.get_one_step_funcs():
+            # Actual inputs do not matter here
+            # Only testing shapes...
+            out = f(self.__innovations_broadcast,
+                    self.__variances_broadcast)
+            if isinstance(out, tuple):
+                for o in out:
+                    self.assertEqual(o.shape, self.__shape_broadcast)
+            else:
+                self.assertEqual(out.shape, self.__shape_broadcast)
+
+    # One-step filter
+
+    def one_step_filter(self, returns=__returns):
+        return self.model.one_step_filter(returns, self.__variances)
+
+    def one_step_simulate(self, innovations=__innovations):
+        return self.model.one_step_simulate(innovations, self.__variances)
+
+    def test_one_step_simulate_revertsto_filter(self):
+        simulated_variances, simulated_returns = self.one_step_simulate()
+        filtered_variances, filtered_innovations = self.one_step_filter(
+                returns=simulated_returns)
+        np.testing.assert_allclose(simulated_variances, filtered_variances)
+        np.testing.assert_allclose(self.__innovations, filtered_innovations)
+
+    def test_one_step_filter_positive_variance(self):
+        next_variances, _ = self.one_step_filter()
+        np.testing.assert_array_equal(next_variances>0, True)
+
+    def test_one_step_simulate_positive_variance(self):
+        next_variances, _ = self.one_step_simulate()
+        np.testing.assert_array_equal(next_variances>0, True)
+
+    # TODO: send to estimator
+    # def test_neg_log_like_at_few_values(self):
+    #     nll = self.model.negative_log_likelihood(1, 1)
+    #     self.assertAlmostEqual(nll, 0.5)
+    #     nll = self.model.negative_log_likelihood(0, np.exp(1))
+    #     self.assertAlmostEqual(nll, 0.5)
+
+    # One-step innovation roots
+
+    def test_one_step_roots_when_valid(self):
+        variances_at_singularity = self.get_lowest_one_step_variance()
+        next_variances = variances_at_singularity + 1e-5
+        left_roots, right_roots = self.model.one_step_roots(
+                self.__variances,
+                next_variances)
+        for (z,s) in zip((left_roots, right_roots), ('left', 'right')):
+            next_variances_solved, _ = self.model.one_step_simulate(
+                z, self.__variances)
+            np.testing.assert_allclose(next_variances_solved, next_variances,
+                    err_msg = 'Invalid ' + s + ' roots.')
+
+    def get_lowest_one_step_variance(self):
+        return self.model._get_lowest_one_step_variance(self.__variances)
+
+    def test_one_step_roots_left_right_order(self):
+        variances_at_singularity = self.get_lowest_one_step_variance()
+        next_variances = variances_at_singularity + 1e-5
+        left_roots, right_roots = self.model.one_step_roots(
+                self.__variances,
+                next_variances)
+        np.testing.assert_equal(left_roots<right_roots, True)
+
+    def test_roots_nan_when_below_lowest(self):
+        variances_at_singularity = self.get_lowest_one_step_variance()
+        impossible_variances = variances_at_singularity - 1e-5
+        left_roots, right_roots = self.model.one_step_roots(
+                self.__variances, impossible_variances)
+        np.testing.assert_equal(left_roots, np.nan)
+        np.testing.assert_equal(right_roots, np.nan)
+
+    def test_same_roots_at_singularity(self):
+        variances_at_singularity = self.get_lowest_one_step_variance()
+        left_roots, right_roots = self.model.one_step_roots(
+                self.__variances, variances_at_singularity)
+        np.testing.assert_allclose(left_roots,right_roots)
+
+    # One-step variance integration
+
+    def test_one_step_integrate(self):
+        from_ = -0.534
+        to_ = 0.123
+        variance = 1e-4
+        def to_integrate(z):
+            (h, _) = self.model.one_step_simulate(z, variance)
+            return h * norm.pdf(z)
+        expected_value = integrate.quad(to_integrate, from_, to_)
+        value = (self.model.one_step_integrate_until_innov(to_, variance)
+                - self.model.one_step_integrate_until_innov(from_, variance))
+        self.assertAlmostEqual(value, expected_value[0])
+
+    def test_one_step_integrate_zero_at_minf(self):
+        variance = 1e-4
+        value_at_minf = self.model.one_step_integrate_until_innov(
+                -np.inf, variance)
+        self.assertAlmostEqual(value_at_minf, 0)
+
+    def test_one_step_integrate_zero_at_inf(self):
+        variance = 1e-4
+        value_at_inf = self.model.one_step_integrate_until_innov(
+                np.inf, variance)
+        expected_value = (self.model.omega + self.model.alpha
+                + (self.model.beta +
+                self.model.alpha * self.model.gamma ** 2) * variance)
+        self.assertAlmostEqual(value_at_inf, expected_value)
+
+class TestGarch(TestTimeseriesGarchFixture,
+        TestOneStepGarchFixture,
+        unittest.TestCase):
 
     model = pymaat.models.Garch(
             mu=2.01,
@@ -46,103 +283,6 @@ class TestGarchFilters(unittest.TestCase):
             beta=0.79,
             gamma=196.21)
 
-    def test_simulate_revertsto_filter(self):
-        innov_ts = self.randn
-        first_var = 1e-4
-        (sim_var_ts, sim_ret_ts) = self.model.simulate(innov_ts, first_var)
-        (fil_var_ts, fil_innov_ts) = self.model.filter(sim_ret_ts, first_var)
-        np.testing.assert_allclose(sim_var_ts, fil_var_ts)
-        np.testing.assert_allclose(innov_ts, fil_innov_ts)
-
-    def test_one_step_simulate_revertsto_filter(self):
-        innov = self.randn
-        var = self.randg
-        sim_next_var, sim_returns = self.model.one_step_simulate(innov,var)
-        fil_next_var, fil_innov = self.model.one_step_filter(sim_returns,var)
-        np.testing.assert_allclose(sim_next_var, fil_next_var)
-        np.testing.assert_allclose(innov, fil_innov)
-
-    def test_filter_len2_tuple(self):
-        out = self.model.filter(self.randn, 1e-4)
-        self.assertIsInstance(out, tuple)
-        self.assertEqual(len(out), 2)
-
-    def test_filter_size(self):
-        var, innov = self.model.filter(self.randn, 1e-4)
-        expected_var_shape = (self.shape[0]+1,) + self.shape[1:]
-        expected_innov_shape = self.shape
-        self.assertEqual(var.shape, expected_var_shape)
-        self.assertEqual(innov.shape, expected_innov_shape)
-
-    def test_filter_positive_variance(self):
-        (h,*_) = self.model.filter(self.randn, 1e-4)
-        np.testing.assert_array_equal(h>0, True)
-
-    def test_filter_throws_exception_when_non_positive_variance(self):
-        with self.assertRaises(ValueError):
-            self.model.filter(self.randn, -1)
-        with self.assertRaises(ValueError):
-            self.model.filter(self.randn, 0)
-
-    def test_simulate_len2_tuple(self):
-        out = self.model.simulate(self.randn, 1e-4)
-        self.assertIsInstance(out, tuple)
-        self.assertEqual(len(out), 2)
-
-    def test_simulate_size(self):
-        var, ret = self.model.simulate(self.randn, 1e-4)
-        expected_var_shape = (self.shape[0]+1,) + self.shape[1:]
-        expected_ret_shape = self.shape
-        self.assertEqual(var.shape, expected_var_shape)
-        self.assertEqual(ret.shape, expected_ret_shape)
-
-    def test_simulate_positive_variance(self):
-        (h,*_) = self.model.simulate(self.randn, 1e-4)
-        np.testing.assert_array_equal(h>0, True)
-
-    def test_simulate_throws_exception_when_non_positive_variance(self):
-        with self.assertRaises(ValueError):
-            self.model.simulate(self.randn, -1)
-        with self.assertRaises(ValueError):
-            self.model.simulate(self.randn, 0)
-
-    def test_all_one_step_funcs_support_broadcasting(self):
-        in1 = np.array([[1,2,3]])
-        in2 = np.array([[1],[2]])
-        all_one_step_funcs = [
-                lambda: self.model.one_step_filter(in1, in2),
-                lambda: self.model.one_step_simulate(in1, in2),
-                lambda: self.model.one_step_has_roots(in1, in2),
-                lambda: self.model.one_step_roots(in1, in2),
-                lambda: self.model.one_step_integrate_until_innov(in1, in2)]
-        for f in all_one_step_funcs:
-            out = f()
-            if isinstance(out, tuple):
-                for o in out:
-                    self.assertEqual(o.shape, (2,3))
-            else:
-                self.assertEqual(out.shape, (2,3))
-
-    def test_one_step_filter_len2_tuple(self):
-        out = self.model.one_step_filter(self.randn, self.randg)
-        self.assertIsInstance(out, tuple)
-        self.assertEqual(len(out), 2)
-
-    def test_one_step_filter_consistent_output(self):
-        out = self.model.one_step_filter(self.randn, self.randg)
-        self.assertEqual(out[0].size, self.randn.size)
-        self.assertEqual(out[1].size, self.randn.size)
-        out = self.model.one_step_filter(self.randn, 1)
-        self.assertEqual(out[0].size, self.randn.size)
-        self.assertEqual(out[1].size, self.randn.size)
-        out = self.model.one_step_filter(0, 1)
-        self.assertIsInstance(out[0], float)
-        self.assertIsInstance(out[1], float)
-
-    def test_one_step_filter_positive_variance(self):
-        next_var, *_ = self.model.one_step_filter(self.randn, self.randg)
-        np.testing.assert_array_equal(next_var>0, True)
-
     def test_one_step_filter_at_few_values(self):
         next_var, innov = self.model.one_step_filter(0, 1)
         self.assertAlmostEqual(innov, 0.5-self.model.mu)
@@ -150,27 +290,6 @@ class TestGarchFilters(unittest.TestCase):
                   self.model.omega
                 + self.model.beta
                 + self.model.alpha * (innov - self.model.gamma) ** 2)
-
-    def test_one_step_simulate_len2_tuple(self):
-        out = self.model.one_step_simulate(self.randn, self.randg)
-        self.assertIsInstance(out,tuple)
-        self.assertEqual(len(out),2)
-
-    def test_one_step_simulate_consistent_output(self):
-        out = self.model.one_step_simulate(self.randn, self.randg)
-        self.assertEqual(out[0].shape, self.shape)
-        self.assertEqual(out[1].shape, self.shape)
-        out = self.model.one_step_simulate(self.randn, 1)
-        self.assertEqual(out[0].shape, self.shape)
-        self.assertEqual(out[1].shape, self.shape)
-        out = self.model.one_step_simulate(0, 1)
-        self.assertIsInstance(out[0], float)
-        self.assertIsInstance(out[1], float)
-
-    def test_one_step_simulate_positive_variance(self):
-        next_var, *_ = self.model.one_step_simulate(
-                self.randn, self.randg)
-        np.testing.assert_array_equal(next_var>0, True)
 
     def test_one_step_simulate_at_few_values(self):
         next_var, ret = self.model.one_step_simulate(0, 0)
@@ -183,51 +302,14 @@ class TestGarchFilters(unittest.TestCase):
                 + self.model.beta
                 + self.model.alpha * self.model.gamma ** 2)
 
-    def test_neg_log_like_at_few_values(self):
-        nll = self.model.negative_log_likelihood(1, 1)
-        self.assertAlmostEqual(nll, 0.5)
-        nll = self.model.negative_log_likelihood(0, np.exp(1))
-        self.assertAlmostEqual(nll, 0.5)
-
-    def test_one_step_roots_when_valid(self):
-        var = 1e-4
-        lowest_next_var = self.model._get_lowest_one_step_variance(var)
-        next_var = lowest_next_var + 1e-5
-        roots = self.model.one_step_roots(var, next_var)
-        next_var_left, *_ = self.model.one_step_simulate(roots[0], var)
-        next_var_right, *_ = self.model.one_step_simulate(roots[1], var)
-        self.assertAlmostEqual(next_var_left, next_var)
-        self.assertAlmostEqual(next_var_right, next_var)
-
-    def test_one_step_roots_left_right_order(self):
-        var = 1e-4
-        lowest_next_var = self.model._get_lowest_one_step_variance(var)
-        next_var = lowest_next_var + 1e-5
-        roots = self.model.one_step_roots(var, next_var)
-        self.assertTrue(roots[0]<roots[1])
-
-    def test_roots_nan_when_below_lowest(self):
-        var = 1e-4
-        at_singularity = self.model._get_lowest_one_step_variance(var)
-        roots = self.model.one_step_roots(var, at_singularity)
-        self.assertAlmostEqual(roots[0],roots[1])
-        impossible_var = at_singularity - 1e-5
-        np.testing.assert_equal(
-                self.model.one_step_roots(var, impossible_var),
-                (np.nan, np.nan))
-
-    def test_one_step_integrate(self):
-        from_ = -0.534
-        to_ = 0.123
-        var = 1e-4
-        def to_integrate(z):
-            (h, _) = self.model.one_step_simulate(z, var)
-            return h * norm.pdf(z)
-        expected_value = integrate.quad(to_integrate, from_, to_)
-        value = (self.model.one_step_integrate_until_innov(to_, var)
-                - self.model.one_step_integrate_until_innov(from_, var))
-        self.assertAlmostEqual(value, expected_value[0])
-
+    def test_invalid_param_raise_exception(self):
+        with self.assertRaises(ValueError):
+            pymaat.models.Garch(
+                mu=0,
+                omega=0,
+                alpha=0.5,
+                beta=0.5,
+                gamma=1)
 
 class TestGarchQuantizer(unittest.TestCase):
 

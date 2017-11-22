@@ -4,7 +4,6 @@ import numpy as np
 import scipy.optimize
 from scipy.stats import norm
 
-
 class Garch():
     def __init__(self, mu, omega, alpha, beta, gamma):
         self.mu = mu
@@ -15,7 +14,7 @@ class Garch():
         if (1 - self.beta - self.alpha*self.gamma**2 <= 0):
             raise ValueError
 
-    def filter(self, return_ts, first_var):
+    def timeseries_filter(self, return_ts, first_var):
         self._raise_value_error_if_invalid_variance(first_var)
 
         innov_ts = np.empty_like(return_ts)
@@ -26,7 +25,7 @@ class Garch():
 
         return (var_ts, innov_ts)
 
-    def simulate(self, innov_ts, first_var):
+    def timeseries_simulate(self, innov_ts, first_var):
         self._raise_value_error_if_invalid_variance(first_var)
 
         return_ts = np.empty_like(innov_ts)
@@ -59,10 +58,29 @@ class Garch():
         return (innov_left, innov_right)
 
     def one_step_integrate_until_innov(self, innov, var):
+        # Formatting input
+        innov = np.asarray(innov)
+        var = np.asarray(var)
+        scalar_input = False
+        if innov.ndim == 0 and var.ndim == 0:
+            innov = innov[np.newaxis]  # Makes x 1D
+            var = var[np.newaxis]  # Makes x 1D
+            scalar_input = True
+        # Compute factors
         cdf_factor = (self.omega + self.alpha
                 + (self.beta + self.alpha * self.gamma ** 2) * var)
         pdf_factor = self.alpha * (2 * self.gamma * np.sqrt(var) - innov)
-        return cdf_factor * norm.cdf(innov) + pdf_factor * norm.pdf(innov)
+        # Treat limit cases (innov = +- infinity)
+        limit_cases = np.isinf(innov)
+        limit_cases = np.logical_and(limit_cases,
+                np.ones_like(var, dtype=bool)) # Broadcast
+        pdf_factor[limit_cases] = 0
+        # Compute integral
+        out = cdf_factor * norm.cdf(innov) + pdf_factor * norm.pdf(innov)
+        # Formatting output
+        if scalar_input:
+            return np.squeeze(out)
+        return out
 
     def one_step_has_roots(self, var, next_var):
         return next_var<=self._get_lowest_one_step_variance(var)
@@ -70,9 +88,9 @@ class Garch():
     def _get_lowest_one_step_variance(self, var):
         return self.omega + self.beta * var
 
-    # TODO Send to estimator
-    def negative_log_likelihood(self, innov, var):
-        return 0.5 * (np.power(innov, 2) + np.log(var))
+    # TODO: Send to estimator
+    # def negative_log_likelihood(self, innov, var):
+    #     return 0.5 * (np.power(innov, 2) + np.log(var))
 
     @staticmethod
     def _raise_value_error_if_invalid_variance(var):
@@ -97,7 +115,7 @@ class Quantizer():
             raise ValueError
 
         # Initialization of quantizer (incl. probabilities)
-        (self.gamma,*_) = self.model.simulate(init_innov, first_var)
+        (self.gamma,*_) = self.model.timeseries_simulate(init_innov, first_var)
         self.gamma.sort(axis=-1)
         self.proba = np.zeros_like(self.gamma)
         self.proba[:,0] = 1
