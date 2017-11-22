@@ -1,5 +1,9 @@
+from functools import partial
+
 import numpy as np
 import scipy.optimize
+from scipy.stats import norm
+
 
 class Garch():
     def __init__(self, mu, omega, alpha, beta, gamma):
@@ -11,27 +15,27 @@ class Garch():
         if (1 - self.beta - self.alpha*self.gamma**2 <= 0):
             raise ValueError
 
-    def filter(self, ret_ts, first_var):
-        self._check_variance(first_var)
+    def filter(self, return_ts, first_var):
+        self._raise_value_error_if_invalid_variance(first_var)
 
-        innov_ts = np.empty_like(ret_ts)
-        var_ts = self._init_var_ts(ret_ts, first_var)
+        innov_ts = np.empty_like(return_ts)
+        var_ts = self._init_var_ts(return_ts, first_var)
 
-        for (t,(r,h)) in enumerate(zip(ret_ts, var_ts)):
+        for (t,(r,h)) in enumerate(zip(return_ts, var_ts)):
             (var_ts[t+1], innov_ts[t]) = self.one_step_filter(r,h)
 
         return (var_ts, innov_ts)
 
     def simulate(self, innov_ts, first_var):
-        self._check_variance(first_var)
+        self._raise_value_error_if_invalid_variance(first_var)
 
-        ret_ts = np.empty_like(innov_ts)
+        return_ts = np.empty_like(innov_ts)
         var_ts = self._init_var_ts(innov_ts, first_var)
 
         for (t,(z,h)) in enumerate(zip(innov_ts, var_ts)):
-            (var_ts[t+1], ret_ts[t]) = self.one_step_simulate(z,h)
+            (var_ts[t+1], return_ts[t]) = self.one_step_simulate(z,h)
 
-        return (var_ts, ret_ts)
+        return (var_ts, return_ts)
 
     def one_step_filter(self, ret, var):
         vol = np.sqrt(var)
@@ -54,6 +58,12 @@ class Garch():
         innov_right = a+d
         return (innov_left, innov_right)
 
+    def one_step_integrate_until_innov(self, innov, var):
+        cdf_factor = (self.omega + self.alpha
+                + (self.beta + self.alpha * self.gamma ** 2) * var)
+        pdf_factor = self.alpha * (2 * self.gamma * np.sqrt(var) - innov)
+        return cdf_factor * norm.cdf(innov) + pdf_factor * norm.pdf(innov)
+
     def one_step_has_roots(self, var, next_var):
         return next_var<=self._get_lowest_one_step_variance(var)
 
@@ -65,7 +75,7 @@ class Garch():
         return 0.5 * (np.power(innov, 2) + np.log(var))
 
     @staticmethod
-    def _check_variance(var):
+    def _raise_value_error_if_invalid_variance(var):
         if np.any(var<=0):
             raise ValueError
 
@@ -80,33 +90,69 @@ class Quantizer():
     def __init__(self, model, init_innov, first_var):
         self.model = model
 
-        if init_innov.ndim == 2:
+        if init_innov.ndim == 2 and init_innov.shape[1]>1:
             self.n_per = init_innov.shape[0]+1
             self.n_quant = init_innov.shape[1]
         else:
             raise ValueError
 
+        # Initialization of quantizer (incl. probabilities)
         (self.gamma,*_) = self.model.simulate(init_innov, first_var)
-        self.gamma.sort()
-        self.voronoi = self._get_voronoi(self.gamma)
-        #TODO set initial transition probas
+        self.gamma.sort(axis=-1)
+        self.proba = np.zeros_like(self.gamma)
+        self.proba[:,0] = 1
 
     def quantize(self):
-        pass
+        self._one_step_quantize(self.gamma[0],self.proba[0], self.gamma[1])
 
-    def _one_step_quantize(self, prev_proba, trans_proba, init_gamma):
-        opt = scipy.optimize.root(fun, init_gamma)
+    def _one_step_quantize(self, prev_gamma, prev_proba, init_gamma):
+        # Optimize quantizer
+        func_to_optimize = partial(self._one_step_gradient,
+                prev_gamma,
+                prev_proba)
+        opt = scipy.optimize.root(func_to_optimize, init_gamma)
+        # Compute transition probabilities
+        #...
+        print(opt.x)
+        print(opt.success)
+        print(opt.message)
 
-    def _gradient(self, prev_gamma, prev_proba, trans_proba, gamma):
+    def _one_step_gradient(self, prev_gamma, prev_proba, gamma):
+        print('In:')
+        print(gamma)
+        # Keep gamma in increasing order
+        sort_id = np.argsort(gamma)
+        gamma = gamma[sort_id]
+        g = np.empty_like(gamma) # Initialize output
+        # Warm-up for broadcasting
+        gamma = gamma[np.newaxis,:]
+        prev_gamma = prev_gamma[:,np.newaxis]
+        # Compute integrals
         voronoi = self._get_voronoi(gamma)
-        z = self.model.one_step_roots(
-                np.reshape(prev_gamma, (self.n_quant, 1)),
-                np.reshape(voronoi, (1, self.n_quant)))
+        i = self._one_step_integrate(prev_gamma, voronoi)
+        prev_proba = prev_proba[np.newaxis,:]
+        # Compute gradient and put back in initial order
+        g[sort_id] = -2 * prev_proba.dot(i).squeeze()
+        print('Out:')
+        print(g)
+        assert(not np.any(np.isnan(g)))
+        return g
 
-    def _integral(self, prev_gamma):
-        pass
+    def _one_step_integrate(self, prev_gamma, voronoi):
+        z = self.model.one_step_roots(prev_gamma, voronoi)
+        cdf = self._get_cdf_factor(prev_gamma, voronoi)
+        pdf = self._get_pdf_factor(prev_gamma, z)
+        (i_left, i_right) = self._get_raw_integral(cdf, pdf, z)
+        # Special bounds (voronoi[0] = 0, voronoi[-1] = +infty)
+        left_pad = np.full((self.n_quant,1), np.nan)
+        right_pad = np.zeros((self.n_quant,1))
+        i_left = np.hstack((left_pad, i_left, right_pad))
+        i_right = np.hstack((left_pad, i_right, cdf[:,-1,np.newaxis]))
+        i = i_right - i_left
+        # Evaluate integral over intervals (voronoi[i], voronoi[i+1])
+        i[np.isnan(i)] = 0
+        return np.diff(i, n=1, axis=-1)
 
     @staticmethod
     def _get_voronoi(gamma):
-        left_pad = np.zeros((gamma.shape[0],1))
-        return np.hstack((left_pad, gamma[:,:-1] + 0.5*np.diff(gamma)))
+        return gamma[:,:-1] + 0.5 * np.diff(gamma, n=1, axis=-1)

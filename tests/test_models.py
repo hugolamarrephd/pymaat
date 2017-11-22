@@ -1,6 +1,8 @@
 import unittest
 
 import numpy as np
+import scipy.integrate as integrate
+from scipy.stats import norm
 
 import pymaat.models
 
@@ -111,7 +113,8 @@ class TestGarchFilters(unittest.TestCase):
                 lambda: self.model.one_step_filter(in1, in2),
                 lambda: self.model.one_step_simulate(in1, in2),
                 lambda: self.model.one_step_has_roots(in1, in2),
-                lambda: self.model.one_step_roots(in1, in2)]
+                lambda: self.model.one_step_roots(in1, in2),
+                lambda: self.model.one_step_integrate_until_innov(in1, in2)]
         for f in all_one_step_funcs:
             out = f()
             if isinstance(out, tuple):
@@ -213,6 +216,18 @@ class TestGarchFilters(unittest.TestCase):
                 self.model.one_step_roots(var, impossible_var),
                 (np.nan, np.nan))
 
+    def test_one_step_integrate(self):
+        from_ = -0.534
+        to_ = 0.123
+        var = 1e-4
+        def to_integrate(z):
+            (h, _) = self.model.one_step_simulate(z, var)
+            return h * norm.pdf(z)
+        expected_value = integrate.quad(to_integrate, from_, to_)
+        value = (self.model.one_step_integrate_until_innov(to_, var)
+                - self.model.one_step_integrate_until_innov(from_, var))
+        self.assertAlmostEqual(value, expected_value[0])
+
 
 class TestGarchQuantizer(unittest.TestCase):
 
@@ -244,30 +259,27 @@ class TestGarchQuantizer(unittest.TestCase):
                 self.init_innov,
                 1e-4)
 
-    def test_initialization_has_consistent_size(self):
+    def test_init_has_consistent_size(self):
         self.assertEqual(self.quant.n_per, self.n_per)
         self.assertEqual(self.quant.n_quant, self.n_quant)
         self.assertEqual(self.quant.gamma.shape,
-                (self.n_per, self.n_quant))
-        self.assertEqual(self.quant.voronoi.shape,
                 (self.n_per, self.n_quant))
 
     def test_init_first_step(self):
         np.testing.assert_array_equal(
                 np.diff(self.quant.gamma[0,1:])==0, True)
-        np.testing.assert_array_equal(
-                np.diff(self.quant.voronoi[0,1:])==0, True)
 
     def test_init_is_sorted_other_steps(self):
         np.testing.assert_array_equal(
                 np.diff(self.quant.gamma[1:])>0, True)
-        np.testing.assert_array_equal(
-                np.diff(self.quant.voronoi[1:])>0, True)
 
     def test_get_voronoi(self):
         v = self.quant._get_voronoi(np.array(
                 [[1,2,3,4,5],
                 [6,7,8,9,10]]))
         np.testing.assert_almost_equal(v, np.array(
-                [[0,1.5,2.5,3.5,4.5],
-                [0,6.5,7.5,8.5,9.5]]))
+                [[1.5,2.5,3.5,4.5],
+                [6.5,7.5,8.5,9.5]]))
+
+    # def test_quantize(self):
+    #     self.quant.quantize()
