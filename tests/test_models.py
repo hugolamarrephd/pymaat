@@ -52,8 +52,15 @@ class TestTimeseriesGarchFixture():
         np.testing.assert_allclose(simulated_variances, filtered_variances)
         np.testing.assert_allclose(self.__innovations, filtered_innovations)
 
-    def test_initialize_variance(self):
-        pass
+    def test_filter_initialize_variance(self):
+        filtered_variance, _ = self.timeseries_filter()
+        np.testing.assert_allclose(filtered_variance[0],
+                self.__first_variance)
+
+    def test_filter_initialize_variance(self):
+        simulated_variance, _ = self.timeseries_simulate()
+        np.testing.assert_allclose(simulated_variance[0],
+                self.__first_variance)
 
     def test_filter_size(self):
         next_variances, innovations = self.timeseries_filter()
@@ -74,7 +81,8 @@ class TestTimeseriesGarchFixture():
 
     def test_simulate_size(self):
         variances, returns = self.timeseries_simulate()
-        self.assertEqual(variances.shape, (self.__shape[0]+1,) + self.__shape[1:])
+        self.assertEqual(variances.shape,
+                (self.__shape[0]+1,) + self.__shape[1:])
         self.assertEqual(returns.shape, self.__shape)
 
     def test_simulate_positive_variance(self):
@@ -135,7 +143,7 @@ class TestOneStepGarchFixture():
                self.model.one_step_simulate,
                self.model.one_step_has_roots,
                self.model.one_step_roots,
-               self.model.one_step_integrate_until_innov]
+               self.model.one_step_expectation_until]
 
     def test_all_funcs_support_scalar(self):
         allowed_primitives = (bool, float)
@@ -145,34 +153,39 @@ class TestOneStepGarchFixture():
             out = f(np.nan, np.nan)
             if isinstance(out, tuple):
                 for o in out:
+                    msg_ = 'Func was {}, Type was: {}'.format(f, type(o))
                     self.assertTrue(type(o) in allowed_primitives,
-                            msg = 'Type was: {}'.format(type(o)))
+                            msg=msg_)
             else:
+                msg_ = 'Func was {}, Type was: {}'.format(f, type(out))
                 self.assertTrue(type(out) in allowed_primitives,
-                            msg = 'Type was: {}'.format(type(o)))
+                            msg=msg_)
 
     def test_all_funcs_support_array(self):
         for f in self.get_one_step_funcs():
         # Actual inputs do not matter here
         # Only testing shapes...
+            msg_ = 'Func was {}'.format(f)
             out = f(self.__innovations, self.__variances)
             if isinstance(out, tuple):
                 for o in out:
-                    self.assertEqual(o.shape, self.__shape)
+                    self.assertEqual(o.shape, self.__shape, msg=msg_)
             else:
-                self.assertEqual(out.shape, self.__shape)
+                self.assertEqual(out.shape, self.__shape, msg=msg_)
 
     def test_all_one_step_funcs_support_broadcasting(self):
         for f in self.get_one_step_funcs():
             # Actual inputs do not matter here
             # Only testing shapes...
+            msg_ = 'Func was {}'.format(f)
             out = f(self.__innovations_broadcast,
                     self.__variances_broadcast)
             if isinstance(out, tuple):
                 for o in out:
-                    self.assertEqual(o.shape, self.__shape_broadcast)
+                    self.assertEqual(o.shape, self.__shape_broadcast,
+                            msg=msg_)
             else:
-                self.assertEqual(out.shape, self.__shape_broadcast)
+                self.assertEqual(out.shape, self.__shape_broadcast, msg=msg_)
 
     # One-step filter
 
@@ -243,6 +256,18 @@ class TestOneStepGarchFixture():
                 self.__variances, variances_at_singularity)
         np.testing.assert_allclose(left_roots,right_roots)
 
+    def test_roots_at_inf_are_pm_inf(self):
+        [left_root, right_root] = self.model.one_step_roots(
+                self.__variances, np.inf)
+        np.testing.assert_equal(left_root, -np.inf)
+        np.testing.assert_equal(right_root, np.inf)
+
+    def test_roots_at_zero_are_nan(self):
+        [left_root, right_root] = self.model.one_step_roots(
+                self.__variances, 0)
+        np.testing.assert_equal(left_root, np.nan)
+        np.testing.assert_equal(right_root, np.nan)
+
     # One-step variance integration
 
     def test_one_step_integrate(self):
@@ -253,23 +278,22 @@ class TestOneStepGarchFixture():
             (h, _) = self.model.one_step_simulate(z, variance)
             return h * norm.pdf(z)
         expected_value = integrate.quad(to_integrate, from_, to_)
-        value = (self.model.one_step_integrate_until_innov(to_, variance)
-                - self.model.one_step_integrate_until_innov(from_, variance))
+        value = (self.model.one_step_expectation_until(variance, to_)
+                - self.model.one_step_expectation_until(variance, from_))
         self.assertAlmostEqual(value, expected_value[0])
 
     def test_one_step_integrate_zero_at_minf(self):
         variance = 1e-4
-        value_at_minf = self.model.one_step_integrate_until_innov(
-                -np.inf, variance)
+        value_at_minf = self.model.one_step_expectation_until(
+                variance, -np.inf)
         self.assertAlmostEqual(value_at_minf, 0)
 
     def test_one_step_integrate_zero_at_inf(self):
         variance = 1e-4
-        value_at_inf = self.model.one_step_integrate_until_innov(
-                np.inf, variance)
+        value_at_inf = self.model.one_step_expectation_until(variance)
         expected_value = (self.model.omega + self.model.alpha
-                + (self.model.beta +
-                self.model.alpha * self.model.gamma ** 2) * variance)
+                + (self.model.beta+
+                self.model.alpha*self.model.gamma**2) * variance)
         self.assertAlmostEqual(value_at_inf, expected_value)
 
 class TestGarch(TestTimeseriesGarchFixture,
@@ -346,6 +370,10 @@ class TestGarchQuantizer(unittest.TestCase):
         self.assertEqual(self.quant.n_quant, self.n_quant)
         self.assertEqual(self.quant.gamma.shape,
                 (self.n_per, self.n_quant))
+        self.assertEqual(self.quant.proba.shape,
+                (self.n_per, self.n_quant))
+        self.assertEqual(self.quant.trans.shape,
+                (self.n_per-1, self.n_quant, self.n_quant))
 
     def test_init_first_step(self):
         np.testing.assert_array_equal(
@@ -355,13 +383,17 @@ class TestGarchQuantizer(unittest.TestCase):
         np.testing.assert_array_equal(
                 np.diff(self.quant.gamma[1:])>0, True)
 
-    def test_get_voronoi(self):
+    def test_get_voronoi_1d(self):
+        v = self.quant._get_voronoi(np.array([1,2,3,4,5]))
+        np.testing.assert_almost_equal(v,
+                np.array([0,1.5,2.5,3.5,4.5,np.inf]))
+
+    def test_get_voronoi_2d(self):
         v = self.quant._get_voronoi(np.array(
                 [[1,2,3,4,5],
                 [6,7,8,9,10]]))
         np.testing.assert_almost_equal(v, np.array(
-                [[1.5,2.5,3.5,4.5],
-                [6.5,7.5,8.5,9.5]]))
-
+                [[0,1.5,2.5,3.5,4.5,np.inf],
+                [0,6.5,7.5,8.5,9.5,np.inf]]))
     # def test_quantize(self):
     #     self.quant.quantize()
