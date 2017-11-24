@@ -90,9 +90,7 @@ class Garch():
         return (innov_left, innov_right)
 
     @instance_returns_numpy_or_scalar(output_type=float)
-    def one_step_expectation_until(self, variances,
-            innovations=np.inf,
-            constant=None):
+    def one_step_expectation_until(self, variances, innovations=np.inf):
         '''
             Integrate `_one_step_equation(z)*gaussian_pdf(z)*dz`
             from -infty to innovations
@@ -112,18 +110,15 @@ class Garch():
                 np.ones_like(variances, dtype=bool))
         pdf_factor[limit_cases] = 0
         # Compute integral
-        if constant is None:
-            return (cdf_factor*norm.cdf(innovations)
-                    + pdf_factor*norm.pdf(innovations))
-        else:
-            return ((cdf_factor+constant)*norm.cdf(innovations)
-                    + pdf_factor*norm.pdf(innovations))
+        cdf = norm.cdf(innovations)
+        pdf = norm.pdf(innovations)
+        return cdf_factor*cdf + pdf_factor*pdf
 
     @instance_returns_numpy_or_scalar(output_type=bool)
     def one_step_has_roots(self,variances, next_variances):
         return next_variances<=self._get_lowest_one_step_variance(variances)
 
-    def _get_lowest_one_step_variance(self,variances):
+    def _get_lowest_one_step_variance(self, variances):
         return self.omega + self.beta*variances
 
     # TODO: Send to estimator
@@ -161,9 +156,11 @@ class Quantizer():
         self.trans = np.zeros((self.n_per-1, self.n_quant, self.n_quant))
 
     def quantize(self):
-        self._one_step_quantize(self.gamma[0],self.proba[0], self.gamma[1])
+        self._one_step_quantize(self.gamma[0], self.proba[0], self.gamma[1])
 
     def _one_step_quantize(self, prev_gamma, prev_proba, init_gamma):
+        # print(np.sqrt(prev_gamma*252)*100)
+        # print(np.sqrt(init_gamma*252)*100)
         # Optimize quantizer
         func_to_optimize = partial(self._one_step_gradient,
                 prev_gamma,
@@ -171,47 +168,45 @@ class Quantizer():
         opt = scipy.optimize.root(func_to_optimize, init_gamma)
         # Compute transition probabilities
         #...
-        print(opt.x)
-        print(opt.success)
-        print(opt.message)
+        # print(np.sqrt(opt.x*252)*100)
+        # print(opt.success)
+        # print(opt.message)
 
     def _one_step_gradient(self, prev_gamma, prev_proba, gamma):
-        print('In:')
-        print(gamma)
         # Keep gamma in increasing order
         sort_id = np.argsort(gamma)
         gamma = gamma[sort_id]
-        g = np.empty_like(gamma) # Initialize output
         # Warm-up for broadcasting
         gamma = gamma[np.newaxis,:]
         prev_gamma = prev_gamma[:,np.newaxis]
-        # Compute integrals
-        voronoi = self._get_voronoi(gamma)
-        i = self._one_step_integrate(prev_gamma, voronoi)
         prev_proba = prev_proba[np.newaxis,:]
+        # Compute integrals
+        integrals = self._one_step_integrate(prev_gamma, gamma)
         # Compute gradient and put back in initial order
-        g[sort_id] = -2 * prev_proba.dot(i).squeeze()
-        print('Out:')
-        print(g)
-        assert(not np.any(np.isnan(g)))
-        return g
+        gradient = np.empty_like(gamma)
+        gradient[0,sort_id] = -2 * prev_proba.dot(integrals)
+        assert not np.any(np.isnan(gradient))
+        return gradient.squeeze()
 
-    def _one_step_integrate(self, prev_gamma, voronoi):
-        z = self.model.one_step_roots(prev_gamma, voronoi)
-        z = (np.hstack((nan_column, z_, inf_column)) for z_ in z)
-        integral = (self.model.one_step_expectation_until(
-                prev_gamma,
-                z_,
-                -voronoi)
-                for z in z_)
-        i = i_right - i_left
-        # Evaluate integral over intervals (voronoi[i], voronoi[i+1])
-        i[np.isnan(i)] = 0
-        return np.diff(i, n=1, axis=-1)
+    def _one_step_integrate(self, prev_gamma, gamma):
+        assert prev_gamma.shape == (self.n_quant, 1)
+        assert gamma.shape == (1, self.n_quant)
+        voronoi = self._get_voronoi(gamma)
+        roots = self.model.one_step_roots(prev_gamma, voronoi)
+        def over_range(integrale, roots):
+            out = integrale(roots[1]) - integrale(roots[0])
+            out[np.isnan(out)] = 0
+            out = np.diff(out, n=1, axis=-1)
+            return out
+        def model(z):
+            return self.model.one_step_expectation_until(prev_gamma, z)
+        def cdf(z):
+            return norm.cdf(z)
+        return over_range(model, roots) - gamma*over_range(cdf, roots)
 
-    @staticmethod
-    def _get_voronoi(gamma):
-        # assert gamma.shape[1]>1
+    def _get_voronoi(self, gamma):
+        assert gamma.shape[1] == self.n_quant
+        assert np.all(np.sort(gamma) == gamma)
         zero_column = np.zeros((gamma.shape[0],1))
         inf_column = np.full((gamma.shape[0],1), np.inf)
         return np.hstack((zero_column,
