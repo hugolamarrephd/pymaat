@@ -149,66 +149,66 @@ class Quantizer():
             raise ValueError
 
         # Initialization of quantizer (incl. probabilities)
-        (self.gamma,*_) = self.model.timeseries_simulate(init_innov, first_variances)
-        self.gamma.sort(axis=-1)
-        self.proba = np.zeros_like(self.gamma)
+        (self.grid,*_) = self.model.timeseries_simulate(init_innov, first_variances)
+        self.grid.sort(axis=1)
+        self.proba = np.zeros_like(self.grid)
         self.proba[:,0] = 1
         self.trans = np.zeros((self.n_per-1, self.n_quant, self.n_quant))
 
     def quantize(self):
-        self._one_step_quantize(self.gamma[0], self.proba[0], self.gamma[1])
+        self._one_step_quantize(self.grid[0], self.proba[0], self.grid[1])
 
-    def _one_step_quantize(self, prev_gamma, prev_proba, init_gamma):
-        # print(np.sqrt(prev_gamma*252)*100)
-        # print(np.sqrt(init_gamma*252)*100)
+    def _one_step_quantize(self, prev_grid, prev_proba, init_grid):
+        # print(np.sqrt(prev_grid*252)*100)
+        # print(np.sqrt(init_grid*252)*100)
         # Optimize quantizer
         func_to_optimize = partial(self._one_step_gradient,
-                prev_gamma,
+                prev_grid,
                 prev_proba)
-        opt = scipy.optimize.root(func_to_optimize, init_gamma)
+        opt = scipy.optimize.root(func_to_optimize, init_grid)
         # Compute transition probabilities
         #...
         # print(np.sqrt(opt.x*252)*100)
         # print(opt.success)
         # print(opt.message)
 
-    def _one_step_gradient(self, prev_gamma, prev_proba, gamma):
-        # Keep gamma in increasing order
-        sort_id = np.argsort(gamma)
-        gamma = gamma[sort_id]
+    def _one_step_gradient(self, prev_grid, prev_proba, grid):
+        # Keep grid in increasing order
+        sort_id = np.argsort(grid)
+        grid = grid[sort_id]
         # Warm-up for broadcasting
-        gamma = gamma[np.newaxis,:]
-        prev_gamma = prev_gamma[:,np.newaxis]
+        grid = grid[np.newaxis,:]
+        prev_grid = prev_grid[:,np.newaxis]
         prev_proba = prev_proba[np.newaxis,:]
         # Compute integrals
-        integrals = self._one_step_integrate(prev_gamma, gamma)
+        integrals = self._one_step_integrate(prev_grid, grid)
         # Compute gradient and put back in initial order
-        gradient = np.empty_like(gamma)
+        gradient = np.empty_like(grid)
         gradient[0,sort_id] = -2 * prev_proba.dot(integrals)
         assert not np.any(np.isnan(gradient))
         return gradient.squeeze()
 
-    def _one_step_integrate(self, prev_gamma, gamma):
-        assert prev_gamma.shape == (self.n_quant, 1)
-        assert gamma.shape == (1, self.n_quant)
-        voronoi = self._get_voronoi(gamma)
-        roots = self.model.one_step_roots(prev_gamma, voronoi)
+    def _one_step_integrate(self, prev_grid, grid):
+        assert prev_grid.shape == (self.n_quant, 1)
+        assert grid.shape == (1, self.n_quant)
+        voronoi = self._get_voronoi(grid)
+        roots = self.model.one_step_roots(prev_grid, voronoi)
         def over_range(integrale, roots):
             out = integrale(roots[1]) - integrale(roots[0])
             out[np.isnan(out)] = 0
             out = np.diff(out, n=1, axis=-1)
             return out
         def model(z):
-            return self.model.one_step_expectation_until(prev_gamma, z)
+            return self.model.one_step_expectation_until(prev_grid, z)
         def cdf(z):
             return norm.cdf(z)
-        return over_range(model, roots) - gamma*over_range(cdf, roots)
+        return over_range(model, roots) - grid*over_range(cdf, roots)
 
-    def _get_voronoi(self, gamma):
-        assert gamma.shape[1] == self.n_quant
-        assert np.all(np.sort(gamma) == gamma)
-        zero_column = np.zeros((gamma.shape[0],1))
-        inf_column = np.full((gamma.shape[0],1), np.inf)
+    def _get_voronoi(self, grid):
+        assert grid.shape[1] == self.n_quant
+        assert np.all(np.sort(grid) == grid)
+        zero_column = np.zeros((grid.shape[0],1))
+        inf_column = np.full((grid.shape[0],1), np.inf)
         return np.hstack((zero_column,
-                gamma[:,:-1] + 0.5 * np.diff(gamma, n=1, axis=-1),
+                grid[:,:-1] + 0.5 * np.diff(grid, n=1, axis=-1),
                 inf_column))

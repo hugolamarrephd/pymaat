@@ -345,44 +345,29 @@ class TestGarchQuantizer(unittest.TestCase):
             beta=0.79,
             gamma=196.21)
 
-    init_innov = np.array(
-      [[ 0.63466271,  1.31646684,  1.57076979, -1.48338134, -0.67547033,
-        -0.94501199, -1.7518655 ,  1.24787024, -0.24152209, -0.83622565],
-       [-0.0116054 , -0.12164961,  0.35902844,  1.98817555, -0.93355169,
-         0.53536977, -0.93841577, -2.26992583,  1.30517792,  0.1969917 ],
-       [-0.69899308,  0.05944492,  0.53521406, -0.01461253,  2.15017583,
-         0.68809939,  0.17947716, -1.0501256 ,  0.26893459, -0.02800586],
-       [ 0.7633553 ,  1.14672781,  0.06308125,  2.84545437,  0.17366648,
-         0.34276091, -0.48812534, -1.30142566,  1.3140757 ,  1.67758884],
-       [-1.05173776, -0.216082  ,  0.02929778,  0.26620765,  1.88502435,
-        -0.6491563 ,  0.29142118,  0.35421171, -0.49258563,  1.45412617]])
+    init_innov = np.array([[ 1.11831764, -0.09778587, -0.2191572 ],
+       [ 0.57855298, -1.5697071 ,  0.83930694]])
 
-    randg = np.array(
-      [[ 1.04074051,  2.05933987,  0.74222461,  0.31858861,  0.69984885,
-         1.05877637,  1.18021904,  0.86159873,  0.64059541,  1.96710069],
-       [ 0.45997411,  0.63373818,  1.06157166,  0.39802806,  1.22545237,
-         0.42371461,  1.53390499,  2.03941965,  1.45412125,  0.0076899 ],
-       [ 0.90758786,  2.40582446,  5.44560271,  3.51215571,  0.21865735,
-         1.58489459,  1.85595452,  0.9368994 ,  0.79833545,  0.76204623],
-       [ 0.40661451,  0.14914885,  2.21583715,  0.62706719,  0.0163997 ,
-         1.10023598,  1.64604063,  0.3700163 ,  0.00642241,  0.28077054],
-       [ 0.69452413,  0.55173963,  0.0383407 ,  1.77994555,  0.27671575,
-         0.4381111 ,  0.02997385,  1.40634986,  1.36966029,  0.99659972]])
-
-
-    n_per = init_innov.shape[0]+1
-    n_quant = init_innov.shape[1]
-
-    def setUp(self):
-        self.quant = pymaat.models.Quantizer(
-                self.model,
-                self.init_innov,
+    quant = pymaat.models.Quantizer(
+                model,
+                init_innov,
                 1e-4)
+
+    prev_grid = 1e-4 * np.array([0.55812529, 0.91400832, 1.73936377])
+    prev_grid.sort()
+    grid = 1e-4 * np.array([ 1.32183054,  1.06478209,  2.35018137])
+    grid.sort()
+
+
+    prev_proba = np.array([0.25,0.5,0.25])
+
+    n_per = 3
+    n_quant = 3
 
     def test_init_has_consistent_size(self):
         self.assertEqual(self.quant.n_per, self.n_per)
         self.assertEqual(self.quant.n_quant, self.n_quant)
-        self.assertEqual(self.quant.gamma.shape,
+        self.assertEqual(self.quant.grid.shape,
                 (self.n_per, self.n_quant))
         self.assertEqual(self.quant.proba.shape,
                 (self.n_per, self.n_quant))
@@ -391,83 +376,78 @@ class TestGarchQuantizer(unittest.TestCase):
 
     def test_init_first_step(self):
         np.testing.assert_array_equal(
-                np.diff(self.quant.gamma[0,1:])==0, True)
+                np.diff(self.quant.grid[0,1:])==0, True)
 
     def test_init_is_sorted_other_steps(self):
         np.testing.assert_array_equal(
-                np.diff(self.quant.gamma[1:])>0, True)
+                np.diff(self.quant.grid[1:])>0, True)
 
     def test_get_voronoi_2d(self):
         v = self.quant._get_voronoi(np.array(
-                [[1,2,3,4,5,6,7,8,9,10],
-                [11,12,13,14,15,16,17,18,19,20]]))
+                [[1,2,3],
+                [11,12,13]]))
         np.testing.assert_almost_equal(v, np.array(
-                [[0,1.5,2.5,3.5,4.5,5.5,6.5,7.5,8.5,9.5,np.inf],
-                [0,11.5,12.5,13.5,14.5,15.5,16.5,17.5,18.5,19.5,np.inf]]))
+                [[0,1.5,2.5,np.inf],
+                [0,11.5,12.5,np.inf]]))
 
-    def test_one_step_integrate(self):
-        prev_gamma = 1e-4 * self.randg[0][:,np.newaxis]
-        prev_gamma.sort(axis=0)
-        gamma = 1e-4 * self.randg[1][np.newaxis,:]
-        gamma.sort(axis=1)
-        voronoi = self.quant._get_voronoi(gamma)
-
-        def perform_integration(bounds, pg, g):
+    def distortion_integral(self, func, prev_grid, grid):
+        voronoi = self.quant._get_voronoi(grid[np.newaxis,:])
+        voronoi = voronoi[0]
+        def do_integration(bounds, pg, g):
             def function_to_integrate(z):
                 (h, _) = self.model.one_step_simulate(z, pg)
-                # Integrate over bounds in terms of variance
-                integral = (h-g) * norm.pdf(z)
-                if isinstance(h, float):
-                    integral = integral if h>=bounds[0] and h<=bounds[1] else 0
+                if h<bounds[0] or h>bounds[1]:
+                    return 0
                 else:
-                    integral[np.logical_or(h<bounds[0], h>bounds[1])] = 0
-                return integral
-            z1,z2 =  self.model.one_step_roots(pg, bounds[0])
-            z3,z4 =  self.model.one_step_roots(pg, bounds[1])
-            pts = np.hstack((z1,z2,z3,z4))
-            pts = pts[np.isfinite(pts)]
-            out = integrate.quad(function_to_integrate, -100, 100, points=pts)
+                    return func(z,h,g)
+            out = integrate.quad(function_to_integrate, -np.inf, np.inf)
             return out[0]
+        return np.array([do_integration((lb,ub), prev_grid, g)
+            for (lb,ub,g) in zip(voronoi[:-1], voronoi[1:], grid)])
 
-        value = self.quant._one_step_integrate(prev_gamma, gamma)
+    def test_one_step_integrate(self):
+        value = self.quant._one_step_integrate(
+                self.prev_grid[:,np.newaxis],
+                self.grid[np.newaxis,:])
+        # Expected value
         expected_value = np.empty_like(value)
-        for (i,pg) in enumerate(prev_gamma):
-            expected_value[i] = np.array(
-                    [perform_integration((lb,ub), pg[0], g)
-                for (lb,ub,g) in zip(voronoi[0,:-1], voronoi[0,1:],gamma[0])])
+        distortion_gradient = lambda z,h,g: (h-g) * norm.pdf(z)
+        for (i,pg) in enumerate(self.prev_grid):
+            expected_value[i] = self.distortion_integral(
+                    distortion_gradient, pg, self.grid)
         np.testing.assert_almost_equal(value, expected_value)
 
 
     def test_one_step_gradient(self):
-        prev_gamma = 1e-4 * self.randg[0][:,np.newaxis]
-        prev_gamma.sort(axis=0)
-        gamma = 1e-4 * self.randg[1][np.newaxis,:]
-        gamma.sort(axis=1)
-        voronoi = self.quant._get_voronoi(gamma)
+        value = self.quant._one_step_gradient(self.prev_grid,
+                self.prev_proba,
+                self.grid)
+        # Expected Value
+        distortion = lambda z,h,g: np.power(h-g,2) * norm.pdf(z)
+        def marginal_distortion(grid):
+            sum_ = np.zeros(self.n_quant)
+            for (pg,pp) in zip(self.prev_grid, self.prev_proba):
+                sum_ += pp * self.distortion_integral(
+                        distortion,
+                        pg,
+                        grid)
+            return sum_
+        expected_value = np.zeros_like(value)
+        epsilon = 1e-6
+        for (i,g) in enumerate(self.grid):
+            grid_tmp = self.grid.copy()
+            grid_tmp[i] = g - epsilon
+            fm = marginal_distortion(grid_tmp)
+            fm = fm[i]
+            grid_tmp[i] = g
+            f = marginal_distortion(grid_tmp)
+            f = f[i]
+            grid_tmp[i] = g + epsilon
+            fp = marginal_distortion(grid_tmp)
+            fp = fp[i]
+            grad = np.gradient(np.array([fm,f,fp]), epsilon)
+            expected_value[i] = grad[1]
 
-        def perform_integration(bounds, pg, g):
-            def function_to_integrate(z):
-                (h, _) = self.model.one_step_simulate(z, pg)
-                # Integrate over bounds in terms of variance
-                integral = np.power(h-g,2) * norm.pdf(z)
-                if isinstance(h, float):
-                    integral = integral if h>=bounds[0] and h<=bounds[1] else 0
-                else:
-                    integral[np.logical_or(h<bounds[0], h>bounds[1])] = 0
-                return integral
-            z1,z2 =  self.model.one_step_roots(pg, bounds[0])
-            z3,z4 =  self.model.one_step_roots(pg, bounds[1])
-            pts = np.hstack((z1,z2,z3,z4))
-            pts = pts[np.isfinite(pts)]
-            out = integrate.quad(function_to_integrate, -100, 100, points=pts)
-            return out[0]
-
-        value = self.quant._one_step_integrate(prev_gamma, gamma)
-        expected_value = np.empty_like(value)
-        for (i,pg) in enumerate(prev_gamma):
-            expected_value[i] = np.array(
-                    [perform_integration((lb,ub), pg[0], g)
-                for (lb,ub,g) in zip(voronoi[0,:-1], voronoi[0,1:],gamma[0])])
         np.testing.assert_almost_equal(value, expected_value)
 
     def test_quantize(self):
