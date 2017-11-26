@@ -156,59 +156,92 @@ class Quantizer():
         self.trans = np.zeros((self.n_per-1, self.n_quant, self.n_quant))
 
     def quantize(self):
-        self._one_step_quantize(self.grid[0], self.proba[0], self.grid[1])
+        for (prev_grid, prev_proba, grid, trans, proba) in zip(
+                self.grid[:-1],
+                self.proba[:-1],
+                self.grid[1:],
+                self.trans,
+                self.proba[1:]):
+            grid[:] = self._one_step_quantize_or_runtime_error(
+                    prev_grid, prev_proba, grid) # [:] to fill row view
+            trans[:,:] = self._transition_probability(prev_grid, grid)
+            proba[:] = prev_proba.dot(trans)
+            np.set_printoptions(linewidth=200)
+            print(np.sqrt(252*grid)*100)
+            # print(trans*100)
+            # print(proba*100)
 
-    def _one_step_quantize(self, prev_grid, prev_proba, init_grid):
-        # print(np.sqrt(prev_grid*252)*100)
-        # print(np.sqrt(init_grid*252)*100)
-        # Optimize quantizer
+    def _one_step_quantize_or_runtime_error(self,
+            prev_grid, prev_proba, init_grid):
         func_to_optimize = partial(self._one_step_gradient,
                 prev_grid,
                 prev_proba)
-        opt = scipy.optimize.root(func_to_optimize, init_grid)
-        # Compute transition probabilities
-        #...
-        # print(np.sqrt(opt.x*252)*100)
-        # print(opt.success)
+        opt = scipy.optimize.root(func_to_optimize, np.log(init_grid))
+        # if opt.success:
         # print(opt.message)
+        out = np.sort(opt.x)
+        return np.exp(out)
+        # else:
+            # raise RuntimeError
 
-    def _one_step_gradient(self, prev_grid, prev_proba, grid):
-        # Keep grid in increasing order
-        sort_id = np.argsort(grid)
-        grid = grid[sort_id]
+    def _one_step_gradient(self, prev_grid, prev_proba, log_grid):
+        grid = np.exp(log_grid)
         # Warm-up for broadcasting
         grid = grid[np.newaxis,:]
         prev_grid = prev_grid[:,np.newaxis]
         prev_proba = prev_proba[np.newaxis,:]
+        # Keep grid in increasing order
+        sort_id = np.argsort(grid[0])
+        grid = grid[:,sort_id]
         # Compute integrals
         integrals = self._one_step_integrate(prev_grid, grid)
-        # Compute gradient and put back in initial order
-        gradient = np.empty_like(grid)
-        gradient[0,sort_id] = -2 * prev_proba.dot(integrals)
+        # Compute gradient
+        gradient = -2 * prev_proba.dot(integrals)
+        # Compte dDist/dlog(Grid) = dDist/dGrid dGrid/dlog(Grid)
+        gradient = gradient[0] * grid[0]
+        # Put back in initial order
+        rev_sort_id = np.argsort(sort_id)
+        gradient = gradient[rev_sort_id]
         assert not np.any(np.isnan(gradient))
-        return gradient.squeeze()
+        # print(gradient)
+        # print('-')
+        return gradient
+
+    def _transition_probability(self, prev_grid, grid):
+        grid = grid[np.newaxis,:]
+        prev_grid = prev_grid[:,np.newaxis]
+        assert prev_grid.shape == (self.n_quant, 1)
+        assert grid.shape == (1, self.n_quant)
+        roots = self._get_voronoi_roots(prev_grid, grid)
+        cdf = lambda z: norm.cdf(z)
+        return self._over_range(cdf, roots)
 
     def _one_step_integrate(self, prev_grid, grid):
         assert prev_grid.shape == (self.n_quant, 1)
         assert grid.shape == (1, self.n_quant)
-        voronoi = self._get_voronoi(grid)
-        roots = self.model.one_step_roots(prev_grid, voronoi)
-        def over_range(integrale, roots):
-            out = integrale(roots[1]) - integrale(roots[0])
-            out[np.isnan(out)] = 0
-            out = np.diff(out, n=1, axis=-1)
-            return out
-        def model(z):
-            return self.model.one_step_expectation_until(prev_grid, z)
-        def cdf(z):
-            return norm.cdf(z)
-        return over_range(model, roots) - grid*over_range(cdf, roots)
+        roots = self._get_voronoi_roots(prev_grid, grid)
+        model = lambda z: self.model.one_step_expectation_until(prev_grid, z)
+        cdf = lambda z: norm.cdf(z)
+        return (self._over_range(model, roots)
+                - grid*self._over_range(cdf, roots))
 
-    def _get_voronoi(self, grid):
-        assert grid.shape[1] == self.n_quant
-        assert np.all(np.sort(grid) == grid)
+    def _get_voronoi_roots(self, prev_grid, grid):
+        v = self._get_voronoi(grid)
+        roots = self.model.one_step_roots(prev_grid, v)
+        return roots
+
+    @staticmethod
+    def _get_voronoi(grid):
+        assert np.all(grid>0)
         zero_column = np.zeros((grid.shape[0],1))
         inf_column = np.full((grid.shape[0],1), np.inf)
         return np.hstack((zero_column,
                 grid[:,:-1] + 0.5 * np.diff(grid, n=1, axis=-1),
                 inf_column))
+
+    @staticmethod
+    def _over_range(integral, roots):
+        out = integral(roots[1]) - integral(roots[0])
+        out[np.isnan(out)] = 0
+        out = np.diff(out, n=1, axis=1)
+        return out

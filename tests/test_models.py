@@ -345,24 +345,16 @@ class TestGarchQuantizer(unittest.TestCase):
             beta=0.79,
             gamma=196.21)
 
-    init_innov = np.array([[ 1.11831764, -0.09778587, -0.2191572 ],
-       [ 0.57855298, -1.5697071 ,  0.83930694]])
+    init_innov = np.array([[1.11831764,-0.09778587,-0.2191572,0.4837482],
+       [0.57855298,-1.5697071,0.83930694,-0.2783948]])
 
-    quant = pymaat.models.Quantizer(
-                model,
-                init_innov,
-                1e-4)
+    quant = pymaat.models.Quantizer(model, init_innov, 1e-4)
 
-    prev_grid = 1e-4 * np.array([0.55812529, 0.91400832, 1.73936377])
-    prev_grid.sort()
-    grid = 1e-4 * np.array([ 1.32183054,  1.06478209,  2.35018137])
-    grid.sort()
-
-
-    prev_proba = np.array([0.25,0.5,0.25])
-
+    prev_grid = 1e-4 * np.array([0.50873928,0.55812529,0.91400832,1.73936377])
+    grid = 1e-4 * np.array([0.0002312,1.06478209,1.32183054,2.35018137])
+    prev_proba = np.array([0.1,0.15,0.5,0.25])
     n_per = 3
-    n_quant = 3
+    n_quant = 4
 
     def test_init_has_consistent_size(self):
         self.assertEqual(self.quant.n_per, self.n_per)
@@ -390,17 +382,26 @@ class TestGarchQuantizer(unittest.TestCase):
                 [[0,1.5,2.5,np.inf],
                 [0,11.5,12.5,np.inf]]))
 
-    def distortion_integral(self, func, prev_grid, grid):
+    def quantized_integral(self, func, prev_grid, grid):
+        assert prev_grid.size==1
         voronoi = self.quant._get_voronoi(grid[np.newaxis,:])
         voronoi = voronoi[0]
         def do_integration(bounds, pg, g):
+            assert g>bounds[0] and g<bounds[1]
             def function_to_integrate(z):
+                # 0 if between bounds else integral input
                 (h, _) = self.model.one_step_simulate(z, pg)
                 if h<bounds[0] or h>bounds[1]:
                     return 0
                 else:
                     return func(z,h,g)
-            out = integrate.quad(function_to_integrate, -np.inf, np.inf)
+            # Help integration by providing discontinuities
+            critical_pts = np.hstack([
+                self.model.one_step_roots(pg, b) for b in bounds])
+            critical_pts = critical_pts[np.isfinite(critical_pts)]
+            # Can safely neglect when z outside [-30,30]
+            out = integrate.quad(function_to_integrate, -30, 30,
+                    points=critical_pts)
             return out[0]
         return np.array([do_integration((lb,ub), prev_grid, g)
             for (lb,ub,g) in zip(voronoi[:-1], voronoi[1:], grid)])
@@ -409,46 +410,70 @@ class TestGarchQuantizer(unittest.TestCase):
         value = self.quant._one_step_integrate(
                 self.prev_grid[:,np.newaxis],
                 self.grid[np.newaxis,:])
-        # Expected value
         expected_value = np.empty_like(value)
-        distortion_gradient = lambda z,h,g: (h-g) * norm.pdf(z)
-        for (i,pg) in enumerate(self.prev_grid):
-            expected_value[i] = self.distortion_integral(
-                    distortion_gradient, pg, self.grid)
+        dist_grad = lambda z,h,g: (h-g) * norm.pdf(z)
+        for (ev,pg) in zip(expected_value, self.prev_grid):
+            ev[:] = self.quantized_integral(dist_grad, pg, self.grid)
         np.testing.assert_almost_equal(value, expected_value)
 
+
+    def numerical_jacobian(self, func, x):
+        assert func(x).size==1
+        def derivate_1d_at(f,x):
+            epsilon = 1e-6
+            return (f(x+epsilon)-f(x-epsilon))/(2*epsilon)
+        grad = np.empty_like(x)
+        for (i,x_) in enumerate(x):
+            def func_1d(x_scalar):
+                xcopy = x.copy()
+                xcopy[i] = x_scalar
+                return func(xcopy)
+            grad[i] = derivate_1d_at(func_1d, x_)
+        return grad
 
     def test_one_step_gradient(self):
         value = self.quant._one_step_gradient(self.prev_grid,
                 self.prev_proba,
-                self.grid)
-        # Expected Value
-        distortion = lambda z,h,g: np.power(h-g,2) * norm.pdf(z)
-        def marginal_distortion(grid):
-            sum_ = np.zeros(self.n_quant)
-            for (pg,pp) in zip(self.prev_grid, self.prev_proba):
-                sum_ += pp * self.distortion_integral(
-                        distortion,
-                        pg,
-                        grid)
-            return sum_
-        expected_value = np.zeros_like(value)
-        epsilon = 1e-6
-        for (i,g) in enumerate(self.grid):
-            grid_tmp = self.grid.copy()
-            grid_tmp[i] = g - epsilon
-            fm = marginal_distortion(grid_tmp)
-            fm = fm[i]
-            grid_tmp[i] = g
-            f = marginal_distortion(grid_tmp)
-            f = f[i]
-            grid_tmp[i] = g + epsilon
-            fp = marginal_distortion(grid_tmp)
-            fp = fp[i]
-            grad = np.gradient(np.array([fm,f,fp]), epsilon)
-            expected_value[i] = grad[1]
-
+                np.log(self.grid))
+        dist_func = lambda z,h,g: np.power(h-g,2) * norm.pdf(z)
+        def marginal_distortion(log_grid):
+            grid = np.exp(log_grid)
+            dist = np.empty((self.n_quant, self.n_quant))
+            for (d,pg) in zip(dist, self.prev_grid):
+                 d[:] = self.quantized_integral(dist_func, pg, grid)
+            return self.prev_proba.dot(dist).sum()
+        expected_value = self.numerical_jacobian(
+                marginal_distortion, np.log(self.grid))
         np.testing.assert_almost_equal(value, expected_value)
 
+    def test_trans_proba_size(self):
+        trans = self.quant._transition_probability(self.prev_grid, self.grid)
+        self.assertEqual(trans.shape, (self.n_quant, self.n_quant))
+
+    def test_first_trans_proba_all_rows_are_equal(self):
+        trans = self.quant._transition_probability(self.quant.grid[0],
+                self.grid)
+        first_row = trans[0]
+        np.testing.assert_array_equal(trans==first_row, True)
+
+    def test_trans_proba(self):
+        value = self.quant._transition_probability(
+                self.prev_grid,
+                self.grid)
+        expected_value = np.empty_like(value)
+        normpdf = lambda z,h,g: norm.pdf(z)
+        for (ev,pg) in zip(expected_value, self.prev_grid):
+            ev[:] = self.quantized_integral(normpdf, pg, self.grid)
+        np.testing.assert_almost_equal(value, expected_value)
+
+    def test_one_step_quantize_sorted(self):
+        new_grid = self.quant._one_step_quantize_or_runtime_error(
+                self.prev_grid,
+                self.prev_proba,
+                1e-4*np.array([1.5123,2.123,0.5213,0.3213]))
+        np.testing.assert_almost_equal(new_grid, np.sort(new_grid))
+
     def test_quantize(self):
-        self.quant.quantize()
+        init_innov = np.random.normal(size=(5,10))
+        quant = pymaat.models.Quantizer(self.model, init_innov, (0.18**2)/252)
+        quant.quantize()
