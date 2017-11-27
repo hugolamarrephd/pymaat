@@ -345,34 +345,30 @@ class TestGarchQuantizer(unittest.TestCase):
             beta=0.79,
             gamma=196.21)
 
-    init_innov = np.array([[1.11831764,-0.09778587,-0.2191572,0.4837482],
-       [0.57855298,-1.5697071,0.83930694,-0.2783948]])
-
-    quant = pymaat.models.Quantizer(model, init_innov, 1e-4)
+    nper = 3
+    nquant = 4
+    quant = pymaat.models.Quantizer(model, nper=nper, nquant=nquant)
 
     prev_grid = 1e-4 * np.array([0.50873928,0.55812529,0.91400832,1.73936377])
-    grid = 1e-4 * np.array([0.0002312,1.06478209,1.32183054,2.35018137])
     prev_proba = np.array([0.1,0.15,0.5,0.25])
-    n_per = 3
-    n_quant = 4
+    most_proba = 2 # ID to most probable in previous grid
 
-    def test_init_has_consistent_size(self):
-        self.assertEqual(self.quant.n_per, self.n_per)
-        self.assertEqual(self.quant.n_quant, self.n_quant)
-        self.assertEqual(self.quant.grid.shape,
-                (self.n_per, self.n_quant))
-        self.assertEqual(self.quant.proba.shape,
-                (self.n_per, self.n_quant))
-        self.assertEqual(self.quant.trans.shape,
-                (self.n_per-1, self.n_quant, self.n_quant))
+    grid = 1e-4 * np.array([0.0002312,1.06478209,1.32183054,2.35018137])
 
-    def test_init_first_step(self):
-        np.testing.assert_array_equal(
-                np.diff(self.quant.grid[0,1:])==0, True)
+    def test_init(self):
+        self.assertEqual(self.quant.nper, self.nper)
+        self.assertEqual(self.quant.nquant, self.nquant)
 
-    def test_init_is_sorted_other_steps(self):
-        np.testing.assert_array_equal(
-                np.diff(self.quant.grid[1:])>0, True)
+
+    def test_initialize(self):
+        first_variance = 1e-4
+        grid, proba, trans = self.quant._initialize(first_variance)
+        # Shapes
+        self.assertEqual(grid.shape, (self.nper+1, self.nquant))
+        self.assertEqual(proba.shape, (self.nper+1, self.nquant))
+        self.assertEqual(trans.shape, (self.nper, self.nquant, self.nquant))
+        # First grid
+        np.testing.assert_array_equal(grid[0,1:]==first_variance, True)
 
     def test_get_voronoi_2d(self):
         v = self.quant._get_voronoi(np.array(
@@ -416,12 +412,12 @@ class TestGarchQuantizer(unittest.TestCase):
             ev[:] = self.quantized_integral(dist_grad, pg, self.grid)
         np.testing.assert_almost_equal(value, expected_value)
 
-
     def numerical_jacobian(self, func, x):
         assert func(x).size==1
         def derivate_1d_at(f,x):
-            epsilon = 1e-6
-            return (f(x+epsilon)-f(x-epsilon))/(2*epsilon)
+            epsilon = 1e-8
+            # Forward differences to make sure variance stays positive
+            return (f(x+epsilon)-f(x))/(epsilon)
         grad = np.empty_like(x)
         for (i,x_) in enumerate(x):
             def func_1d(x_scalar):
@@ -434,11 +430,33 @@ class TestGarchQuantizer(unittest.TestCase):
     def test_one_step_gradient(self):
         value = self.quant._one_step_gradient(self.prev_grid,
                 self.prev_proba,
+                self.grid)
+        dist_func = lambda z,h,g: np.power(h-g,2) * norm.pdf(z)
+        def marginal_distortion(grid):
+            dist = np.empty((self.nquant, self.nquant))
+            for (d,pg) in zip(dist, self.prev_grid):
+                 d[:] = self.quantized_integral(dist_func, pg, grid)
+            return self.prev_proba.dot(dist).sum()
+        expected_value = self.numerical_jacobian(
+                marginal_distortion, self.grid)
+        np.testing.assert_almost_equal(value, expected_value)
+
+    def test_transformation(self):
+        x = np.array(range(-20,20), float)
+        grid = self.quant._inv_transform(x, self.prev_grid)
+        x_ = self.quant._transform(grid, self.prev_grid)
+        np.testing.assert_almost_equal(x, x_)
+
+    def test_one_step_gradient_transformed(self):
+        # By-pass _transform and _inv_transform
+        # Test should pass with log transformation only
+        value = self.quant._one_step_gradient_transformed(self.prev_grid,
+                self.prev_proba,
                 np.log(self.grid))
         dist_func = lambda z,h,g: np.power(h-g,2) * norm.pdf(z)
         def marginal_distortion(log_grid):
             grid = np.exp(log_grid)
-            dist = np.empty((self.n_quant, self.n_quant))
+            dist = np.empty((self.nquant, self.nquant))
             for (d,pg) in zip(dist, self.prev_grid):
                  d[:] = self.quantized_integral(dist_func, pg, grid)
             return self.prev_proba.dot(dist).sum()
@@ -446,15 +464,38 @@ class TestGarchQuantizer(unittest.TestCase):
                 marginal_distortion, np.log(self.grid))
         np.testing.assert_almost_equal(value, expected_value)
 
+    def test_init_grid_from_most_probable(self):
+        init_grid = self.quant._init_grid_from_most_probable(
+                self.prev_grid, self.prev_proba)
+        self.assertTrue(init_grid.shape==(self.nquant,))
+        np.testing.assert_array_equal(init_grid>0, True)
+        np.testing.assert_array_equal(np.diff(init_grid)>0, True)
+        self.assertTrue(init_grid[0]<self.prev_grid[self.most_proba])
+        self.assertTrue(init_grid[-1]>self.prev_grid[self.most_proba])
+
+    def test_one_step_quantize_sorted(self):
+        (_, new_grid) = self.quant._one_step_quantize(
+                self.prev_grid, self.prev_proba)
+        np.testing.assert_almost_equal(new_grid, np.sort(new_grid))
+
+    def test_get_init_innov_is_sorted(self):
+        init = self.quant._get_init_innov(self.nquant)
+        np.testing.assert_array_equal(np.diff(init)>0, True)
+        # More concentrated in center
+        diff_center = init[0,2]-init[0,1]
+        diff_first = init[0,1]-init[0,0]
+        diff_last = init[0,3]-init[0,2]
+        self.assertTrue(diff_center<diff_first)
+        self.assertTrue(diff_center<diff_last)
+
     def test_trans_proba_size(self):
         trans = self.quant._transition_probability(self.prev_grid, self.grid)
-        self.assertEqual(trans.shape, (self.n_quant, self.n_quant))
+        self.assertEqual(trans.shape, (self.nquant, self.nquant))
 
-    def test_first_trans_proba_all_rows_are_equal(self):
-        trans = self.quant._transition_probability(self.quant.grid[0],
-                self.grid)
-        first_row = trans[0]
-        np.testing.assert_array_equal(trans==first_row, True)
+    def test_trans_proba_sum_to_one_and_non_negative(self):
+        trans = self.quant._transition_probability(self.prev_grid, self.grid)
+        np.testing.assert_array_equal(trans>=0, True)
+        np.testing.assert_almost_equal(np.sum(trans,axis=1),1)
 
     def test_trans_proba(self):
         value = self.quant._transition_probability(
@@ -466,14 +507,13 @@ class TestGarchQuantizer(unittest.TestCase):
             ev[:] = self.quantized_integral(normpdf, pg, self.grid)
         np.testing.assert_almost_equal(value, expected_value)
 
-    def test_one_step_quantize_sorted(self):
-        new_grid = self.quant._one_step_quantize_or_runtime_error(
-                self.prev_grid,
-                self.prev_proba,
-                1e-4*np.array([1.5123,2.123,0.5213,0.3213]))
-        np.testing.assert_almost_equal(new_grid, np.sort(new_grid))
+    def test_transition_probability_from_first_grid(self):
+        first_variance = 1e-4
+        grid, *_ = self.quant._initialize(first_variance)
+        trans = self.quant._transition_probability(grid[0],self.grid)
+        first_row = trans[0]
+        np.testing.assert_array_equal(trans==first_row, True)
 
     def test_quantize(self):
-        init_innov = np.random.normal(size=(5,10))
-        quant = pymaat.models.Quantizer(self.model, init_innov, (0.18**2)/252)
-        quant.quantize()
+        quant = pymaat.models.Quantizer(self.model)
+        quant.quantize((0.18**2)/252)

@@ -4,6 +4,8 @@ import numpy as np
 import scipy.optimize
 from scipy.stats import norm
 
+def print_as_vol(variance):
+    print(np.sqrt(variance*252)*100)
 
 # TODO: move to utilities
 def instance_returns_numpy_or_scalar(output_type):
@@ -137,55 +139,82 @@ class Garch():
         variances[0] = first_variances
         return variances
 
-
 class Quantizer():
-    def __init__(self, model, init_innov, first_variances):
+    def __init__(self, model, *, nper=21, nquant=100):
         self.model = model
+        self.nper = nper
+        self.nquant = nquant
+        self._init_innov = self._get_init_innov(self.nquant)
 
-        if init_innov.ndim == 2 and init_innov.shape[1]>1:
-            self.n_per = init_innov.shape[0]+1
-            self.n_quant = init_innov.shape[1]
-        else:
+    def quantize(self, first_variance):
+        # Check input
+        first_variance = np.atleast_1d(first_variance)
+        if first_variance.shape != (1,):
             raise ValueError
+        grid, proba, trans = self._initialize(first_variance)
+        for t in range(1,self.nper+1):
+            success, grid[t] = self._one_step_quantize(grid[t-1], proba[t-1])
+            if not success: # Early failure
+                raise RuntimeError
+            trans[t-1] = self._transition_probability(grid[t-1], grid[t])
+            proba[t] = proba[t-1][np.newaxis,:].dot(trans[t-1])
+            # print_as_vol(grid[t])
+            # print(proba[t]*100)
+            break
+        # return quantization
 
-        # Initialization of quantizer (incl. probabilities)
-        (self.grid,*_) = self.model.timeseries_simulate(init_innov, first_variances)
-        self.grid.sort(axis=1)
-        self.proba = np.zeros_like(self.grid)
-        self.proba[:,0] = 1
-        self.trans = np.zeros((self.n_per-1, self.n_quant, self.n_quant))
+    def _initialize(self, first_variance):
+        grid = np.empty((self.nper+1, self.nquant), float)
+        grid[0] = first_variance
+        proba = np.empty_like(grid)
+        proba[0] = 0
+        proba[0,0] = 1
+        trans = np.empty((self.nper, self.nquant, self.nquant), float)
+        return (grid, proba, trans)
 
-    def quantize(self):
-        for (prev_grid, prev_proba, grid, trans, proba) in zip(
-                self.grid[:-1],
-                self.proba[:-1],
-                self.grid[1:],
-                self.trans,
-                self.proba[1:]):
-            grid[:] = self._one_step_quantize_or_runtime_error(
-                    prev_grid, prev_proba, grid) # [:] to fill row view
-            trans[:,:] = self._transition_probability(prev_grid, grid)
-            proba[:] = prev_proba.dot(trans)
-            np.set_printoptions(linewidth=200)
-            print(np.sqrt(252*grid)*100)
-            # print(trans*100)
-            # print(proba*100)
-
-    def _one_step_quantize_or_runtime_error(self,
-            prev_grid, prev_proba, init_grid):
-        func_to_optimize = partial(self._one_step_gradient,
+    def _one_step_quantize(self, prev_grid, prev_proba):
+        func_to_optimize = partial(self._one_step_gradient_transformed,
                 prev_grid,
                 prev_proba)
-        opt = scipy.optimize.root(func_to_optimize, np.log(init_grid))
-        # if opt.success:
-        # print(opt.message)
-        out = np.sort(opt.x)
-        return np.exp(out)
-        # else:
-            # raise RuntimeError
+        init_grid = self._init_grid_from_most_probable(prev_grid, prev_proba)
+        init_x = self._transform(init_grid, prev_grid)
+        sol = scipy.optimize.newton_krylov(func_to_optimize, init_x,\
+                f_tol=1e-19, line_search='wolfe')
+        opt_grid = self._inv_transform(np.sort(sol), prev_grid)
+        return (True, opt_grid)
 
-    def _one_step_gradient(self, prev_grid, prev_proba, log_grid):
-        grid = np.exp(log_grid)
+    def _transform(self, grid, prev_grid):
+        x = np.log(grid - self.model.omega - self.model.beta*prev_grid[0])
+        assert np.all(np.isfinite(x))
+        return x
+
+    def _inv_transform(self, x, prev_grid):
+        # Numerically challenging for very negative x
+        assert np.all(x>-30)
+        grid = self.model.omega + self.model.beta*prev_grid[0] + np.exp(x)
+        return grid
+
+    def _transition_probability(self, prev_grid, grid):
+        grid = grid[np.newaxis,:]
+        prev_grid = prev_grid[:,np.newaxis]
+        assert prev_grid.shape == (self.nquant, 1)
+        assert grid.shape == (1, self.nquant)
+        roots = self._get_voronoi_roots(prev_grid, grid)
+        cdf = lambda z: norm.cdf(z)
+        return self._over_range(cdf, roots)
+
+    def _one_step_gradient_transformed(self, prev_grid, prev_proba, x):
+        print(x)
+        grid = self._inv_transform(x, prev_grid)
+        gradient = self._one_step_gradient(prev_grid, prev_proba, grid)
+        # ddist/dx(Grid) = dsist/dgrid * dgrid/dx(grid)
+        #                  = ddist/dgrid * grid
+        gradient_wrt_log_grid = gradient * grid
+        assert not np.any(np.isnan(gradient))
+        print(gradient_wrt_log_grid)
+        return gradient_wrt_log_grid
+
+    def _one_step_gradient(self, prev_grid, prev_proba, grid):
         # Warm-up for broadcasting
         grid = grid[np.newaxis,:]
         prev_grid = prev_grid[:,np.newaxis]
@@ -195,30 +224,33 @@ class Quantizer():
         grid = grid[:,sort_id]
         # Compute integrals
         integrals = self._one_step_integrate(prev_grid, grid)
-        # Compute gradient
+        # dDist/dGrid
         gradient = -2 * prev_proba.dot(integrals)
-        # Compte dDist/dlog(Grid) = dDist/dGrid dGrid/dlog(Grid)
-        gradient = gradient[0] * grid[0]
+        gradient = gradient.squeeze()
         # Put back in initial order
         rev_sort_id = np.argsort(sort_id)
         gradient = gradient[rev_sort_id]
         assert not np.any(np.isnan(gradient))
-        # print(gradient)
-        # print('-')
         return gradient
 
-    def _transition_probability(self, prev_grid, grid):
-        grid = grid[np.newaxis,:]
-        prev_grid = prev_grid[:,np.newaxis]
-        assert prev_grid.shape == (self.n_quant, 1)
-        assert grid.shape == (1, self.n_quant)
-        roots = self._get_voronoi_roots(prev_grid, grid)
-        cdf = lambda z: norm.cdf(z)
-        return self._over_range(cdf, roots)
+    def _init_grid_from_most_probable(self, prev_grid, prev_proba):
+        most_probable = np.argmax(prev_proba)
+        most_probable_variance = prev_grid[most_probable]
+        return self._init_grid_from(most_probable_variance)
+
+    def _init_grid_from(self, variance_scalar):
+        # Warm-up for broadcast
+        variance_scalar = np.atleast_2d(variance_scalar)
+        assert np.all(variance_scalar>0)
+        # Initialization of quantizer (incl. probabilities)
+        (grid,*_) = self.model.one_step_simulate(
+                self._init_innov, variance_scalar)
+        grid.sort(axis=1)
+        return grid.squeeze()
 
     def _one_step_integrate(self, prev_grid, grid):
-        assert prev_grid.shape == (self.n_quant, 1)
-        assert grid.shape == (1, self.n_quant)
+        assert prev_grid.shape == (self.nquant, 1)
+        assert grid.shape == (1, self.nquant)
         roots = self._get_voronoi_roots(prev_grid, grid)
         model = lambda z: self.model.one_step_expectation_until(prev_grid, z)
         cdf = lambda z: norm.cdf(z)
@@ -232,6 +264,7 @@ class Quantizer():
 
     @staticmethod
     def _get_voronoi(grid):
+        assert np.all(np.diff(grid)>0)
         assert np.all(grid>0)
         zero_column = np.zeros((grid.shape[0],1))
         inf_column = np.full((grid.shape[0],1), np.inf)
@@ -245,3 +278,14 @@ class Quantizer():
         out[np.isnan(out)] = 0
         out = np.diff(out, n=1, axis=1)
         return out
+
+    @staticmethod
+    def _get_init_innov(nquant):
+        '''
+        Returns 1-by-nquant 2D-array
+        '''
+        q = np.array(range(1, nquant+1), float) # (1, ..., nquant)
+        q = q/(nquant+1) # (1/(nquant+1), ..., nquant/(nquant+1))
+        init_innov = norm.ppf(q)
+        init_innov = init_innov[np.newaxis,:]
+        return init_innov
