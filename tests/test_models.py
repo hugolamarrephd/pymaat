@@ -5,6 +5,7 @@ import numpy as np
 import scipy.integrate as integrate
 from scipy.stats import norm
 
+import pymaat.testing
 import pymaat.models
 
 
@@ -349,16 +350,19 @@ class TestGarchQuantizer(unittest.TestCase):
     nquant = 4
     quant = pymaat.models.Quantizer(model, nper=nper, nquant=nquant)
 
-    prev_grid = 1e-4 * np.array([0.50873928,0.55812529,0.91400832,1.73936377])
-    prev_proba = np.array([0.1,0.15,0.5,0.25])
+    prev_grid_sorted = np.sort((0.18**2/252)
+            * np.array([0.50873928,0.55812529,1,1.73936377]))
+    prev_proba = np.array([0.05,0.25,0.5,0.20])
+    assert prev_proba.sum()==1.
     most_proba = 2 # ID to most probable in previous grid
 
-    grid = 1e-4 * np.array([0.0002312,1.06478209,1.32183054,2.35018137])
+    grid_sorted, _ = np.sort(model.one_step_simulate(
+            np.array([0.1932423,-0.23491,0.93414,-0.5323434]),
+            1e-4))
 
     def test_init(self):
         self.assertEqual(self.quant.nper, self.nper)
         self.assertEqual(self.quant.nquant, self.nquant)
-
 
     def test_initialize(self):
         first_variance = 1e-4
@@ -374,11 +378,17 @@ class TestGarchQuantizer(unittest.TestCase):
         v = self.quant._get_voronoi(np.array(
                 [[1,2,3],
                 [11,12,13]]))
-        np.testing.assert_almost_equal(v, np.array(
+        np.testing.assert_allclose(v, np.array(
                 [[0,1.5,2.5,np.inf],
                 [0,11.5,12.5,np.inf]]))
 
-    def quantized_integral(self, func, prev_grid, grid):
+    def quantized_integral(self, type_, prev_grid, grid):
+        if type_ == 'distortion':
+            func = lambda z,h,g: np.power(h-g,2) * norm.pdf(z)
+        elif type_ == 'gradient':
+            func = lambda z,h,g: (h-g) * norm.pdf(z)
+        elif type_ == 'pdf':
+            func = lambda z,h,g: norm.pdf(z)
         assert prev_grid.size==1
         voronoi = self.quant._get_voronoi(grid[np.newaxis,:])
         voronoi = voronoi[0]
@@ -404,79 +414,66 @@ class TestGarchQuantizer(unittest.TestCase):
 
     def test_one_step_integrate(self):
         value = self.quant._one_step_integrate(
-                self.prev_grid[:,np.newaxis],
-                self.grid[np.newaxis,:])
+                self.prev_grid_sorted[:,np.newaxis],
+                self.grid_sorted[np.newaxis,:])
         expected_value = np.empty_like(value)
-        dist_grad = lambda z,h,g: (h-g) * norm.pdf(z)
-        for (ev,pg) in zip(expected_value, self.prev_grid):
-            ev[:] = self.quantized_integral(dist_grad, pg, self.grid)
-        np.testing.assert_almost_equal(value, expected_value)
+        for (ev,pg) in zip(expected_value, self.prev_grid_sorted):
+            ev[:] = self.quantized_integral('gradient', pg, self.grid_sorted)
+        np.testing.assert_allclose(value, expected_value)
 
-    def numerical_jacobian(self, func, x):
-        assert func(x).size==1
-        def derivate_1d_at(f,x):
-            epsilon = 1e-8
-            # Forward differences to make sure variance stays positive
-            return (f(x+epsilon)-f(x))/(epsilon)
-        grad = np.empty_like(x)
-        for (i,x_) in enumerate(x):
-            def func_1d(x_scalar):
-                xcopy = x.copy()
-                xcopy[i] = x_scalar
-                return func(xcopy)
-            grad[i] = derivate_1d_at(func_1d, x_)
-        return grad
+    def marginal_distortion(self, grid):
+        dist = np.empty((self.nquant, self.nquant))
+        for (i,pg) in enumerate(self.prev_grid_sorted):
+             dist[i] = self.quantized_integral('distortion', pg, grid)
+        return self.prev_proba.dot(dist).sum()
 
     def test_one_step_gradient(self):
-        value = self.quant._one_step_gradient(self.prev_grid,
+        # Value
+        value = self.quant._one_step_gradient(self.prev_grid_sorted,
                 self.prev_proba,
-                self.grid)
-        dist_func = lambda z,h,g: np.power(h-g,2) * norm.pdf(z)
-        def marginal_distortion(grid):
-            dist = np.empty((self.nquant, self.nquant))
-            for (d,pg) in zip(dist, self.prev_grid):
-                 d[:] = self.quantized_integral(dist_func, pg, grid)
-            return self.prev_proba.dot(dist).sum()
-        expected_value = self.numerical_jacobian(
-                marginal_distortion, self.grid)
-        np.testing.assert_almost_equal(value, expected_value)
+                self.grid_sorted)
+        # Expected value
+        expected_value = pymaat.testing.jacobian_at(
+                self.marginal_distortion,
+                self.grid_sorted,
+                positive_arg=True)
+        # Assertion
+        np.testing.assert_allclose(value, expected_value)
 
     def test_transformation(self):
-        x = np.array(range(-20,20), float)
-        grid = self.quant._inv_transform(x, self.prev_grid)
-        x_ = self.quant._transform(grid, self.prev_grid)
-        np.testing.assert_almost_equal(x, x_)
+        # Transformation is allowed to become numerically unstable
+        # outside [-400,400]
+        x = np.array(range(-400,400), float)
+        grid = self.quant._optim_inv_transform(x, self.prev_grid_sorted)
+        x_ = self.quant._optim_transform(grid, self.prev_grid_sorted)
+        np.testing.assert_allclose(x, x_)
 
     def test_one_step_gradient_transformed(self):
-        # By-pass _transform and _inv_transform
-        # Test should pass with log transformation only
-        value = self.quant._one_step_gradient_transformed(self.prev_grid,
+        # Value
+        value = self.quant._one_step_gradient_transformed(
+                self.prev_grid_sorted,
                 self.prev_proba,
-                np.log(self.grid))
-        dist_func = lambda z,h,g: np.power(h-g,2) * norm.pdf(z)
-        def marginal_distortion(log_grid):
-            grid = np.exp(log_grid)
-            dist = np.empty((self.nquant, self.nquant))
-            for (d,pg) in zip(dist, self.prev_grid):
-                 d[:] = self.quantized_integral(dist_func, pg, grid)
-            return self.prev_proba.dot(dist).sum()
-        expected_value = self.numerical_jacobian(
-                marginal_distortion, np.log(self.grid))
-        np.testing.assert_almost_equal(value, expected_value)
+                np.log(self.grid_sorted))
+        # Expected value
+        def marginal_distortion_transformed(x):
+            grid = self.quant._optim_inv_transform(x, self.prev_grid_sorted)
+            return self.marginal_distortion(grid)
+        init_x = self.quant._optim_transform(
+                self.grid_sorted, self.prev_grid_sorted)
+        expected_value = pymaat.testing.jacobian_at(
+                marginal_distortion_transformed,
+                init_x)
+        # Assertion
+        np.testing.assert_allclose(value, expected_value)
 
     def test_init_grid_from_most_probable(self):
         init_grid = self.quant._init_grid_from_most_probable(
-                self.prev_grid, self.prev_proba)
+                self.prev_grid_sorted, self.prev_proba)
         self.assertTrue(init_grid.shape==(self.nquant,))
         np.testing.assert_array_equal(init_grid>0, True)
         np.testing.assert_array_equal(np.diff(init_grid)>0, True)
-        self.assertTrue(init_grid[0]<self.prev_grid[self.most_proba])
-        self.assertTrue(init_grid[-1]>self.prev_grid[self.most_proba])
-
-    def test_one_step_quantize_sorted(self):
-        (_, new_grid) = self.quant._one_step_quantize(
-                self.prev_grid, self.prev_proba)
-        np.testing.assert_almost_equal(new_grid, np.sort(new_grid))
+        self.assertTrue(init_grid[0]<self.prev_grid_sorted[self.most_proba])
+        self.assertTrue(init_grid[-1]>self.prev_grid_sorted[self.most_proba])
 
     def test_get_init_innov_is_sorted(self):
         init = self.quant._get_init_innov(self.nquant)
@@ -489,31 +486,36 @@ class TestGarchQuantizer(unittest.TestCase):
         self.assertTrue(diff_center<diff_last)
 
     def test_trans_proba_size(self):
-        trans = self.quant._transition_probability(self.prev_grid, self.grid)
+        trans = self.quant._transition_probability(self.prev_grid_sorted, self.grid_sorted)
         self.assertEqual(trans.shape, (self.nquant, self.nquant))
 
     def test_trans_proba_sum_to_one_and_non_negative(self):
-        trans = self.quant._transition_probability(self.prev_grid, self.grid)
+        trans = self.quant._transition_probability(self.prev_grid_sorted, self.grid_sorted)
         np.testing.assert_array_equal(trans>=0, True)
-        np.testing.assert_almost_equal(np.sum(trans,axis=1),1)
+        np.testing.assert_allclose(np.sum(trans,axis=1),1)
 
     def test_trans_proba(self):
         value = self.quant._transition_probability(
-                self.prev_grid,
-                self.grid)
+                self.prev_grid_sorted,
+                self.grid_sorted)
         expected_value = np.empty_like(value)
-        normpdf = lambda z,h,g: norm.pdf(z)
-        for (ev,pg) in zip(expected_value, self.prev_grid):
-            ev[:] = self.quantized_integral(normpdf, pg, self.grid)
-        np.testing.assert_almost_equal(value, expected_value)
+        for (i,pg) in enumerate(self.prev_grid_sorted):
+            expected_value[i] = self.quantized_integral(
+                    'pdf', pg, self.grid_sorted)
+        np.testing.assert_allclose(value, expected_value)
 
     def test_transition_probability_from_first_grid(self):
         first_variance = 1e-4
         grid, *_ = self.quant._initialize(first_variance)
-        trans = self.quant._transition_probability(grid[0],self.grid)
+        trans = self.quant._transition_probability(grid[0],self.grid_sorted)
         first_row = trans[0]
         np.testing.assert_array_equal(trans==first_row, True)
 
-    def test_quantize(self):
-        quant = pymaat.models.Quantizer(self.model)
-        quant.quantize((0.18**2)/252)
+    # def test_one_step_quantize_sorted(self):
+    #     (_, new_grid) = self.quant._one_step_quantize(
+    #             self.prev_grid_sorted, self.prev_proba)
+    #     np.testing.assert_allclose(new_grid, np.sort(new_grid))
+
+#     def test_quantize(self):
+#         quant = pymaat.models.Quantizer(self.model)
+#         quant.quantize((0.18**2)/252)

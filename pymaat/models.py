@@ -177,42 +177,35 @@ class Quantizer():
                 prev_grid,
                 prev_proba)
         init_grid = self._init_grid_from_most_probable(prev_grid, prev_proba)
-        init_x = self._transform(init_grid, prev_grid)
-        sol = scipy.optimize.newton_krylov(func_to_optimize, init_x,\
-                f_tol=1e-19, line_search='wolfe')
-        opt_grid = self._inv_transform(np.sort(sol), prev_grid)
+        init_x = self._optim_transform(init_grid, prev_grid)
+        sol = scipy.optimize.newton_krylov(func_to_optimize, init_x)
+                # f_tol=1e-19, line_search='wolfe')
+        opt_grid = self._optim_inv_transform(np.sort(sol), prev_grid)
         return (True, opt_grid)
 
-    def _transform(self, grid, prev_grid):
-        x = np.log(grid - self.model.omega - self.model.beta*prev_grid[0])
-        assert np.all(np.isfinite(x))
-        return x
-
-    def _inv_transform(self, x, prev_grid):
-        # Numerically challenging for very negative x
-        assert np.all(x>-30)
-        grid = self.model.omega + self.model.beta*prev_grid[0] + np.exp(x)
-        return grid
-
-    def _transition_probability(self, prev_grid, grid):
-        grid = grid[np.newaxis,:]
-        prev_grid = prev_grid[:,np.newaxis]
-        assert prev_grid.shape == (self.nquant, 1)
-        assert grid.shape == (1, self.nquant)
-        roots = self._get_voronoi_roots(prev_grid, grid)
-        cdf = lambda z: norm.cdf(z)
-        return self._over_range(cdf, roots)
-
     def _one_step_gradient_transformed(self, prev_grid, prev_proba, x):
-        print(x)
-        grid = self._inv_transform(x, prev_grid)
+        # print(x)
+        grid = self._optim_inv_transform(x, prev_grid)
         gradient = self._one_step_gradient(prev_grid, prev_proba, grid)
         # ddist/dx(Grid) = dsist/dgrid * dgrid/dx(grid)
         #                  = ddist/dgrid * grid
         gradient_wrt_log_grid = gradient * grid
         assert not np.any(np.isnan(gradient))
-        print(gradient_wrt_log_grid)
+        # print(gradient_wrt_log_grid)
+        # Catch limit case
+        if 0.5 * (grid[0]+grid[1]) < self._get_minimal_variance(prev_grid):
+            # Numerical hack to avoid leaving relevant space
+            gradient_wrt_log_grid[0] = np.finfo().max
         return gradient_wrt_log_grid
+
+    def _optim_transform(self, grid, prev_grid):
+        x = np.log(grid)
+        assert np.all(np.isfinite(x))
+        return x
+
+    def _optim_inv_transform(self, x, prev_grid):
+        grid = np.exp(x)
+        return grid
 
     def _one_step_gradient(self, prev_grid, prev_proba, grid):
         # Warm-up for broadcasting
@@ -227,11 +220,21 @@ class Quantizer():
         # dDist/dGrid
         gradient = -2 * prev_proba.dot(integrals)
         gradient = gradient.squeeze()
+        # print(gradient)
         # Put back in initial order
         rev_sort_id = np.argsort(sort_id)
         gradient = gradient[rev_sort_id]
         assert not np.any(np.isnan(gradient))
         return gradient
+
+    def _transition_probability(self, prev_grid, grid):
+        grid = grid[np.newaxis,:]
+        prev_grid = prev_grid[:,np.newaxis]
+        assert prev_grid.shape == (self.nquant, 1)
+        assert grid.shape == (1, self.nquant)
+        roots = self._get_voronoi_roots(prev_grid, grid)
+        cdf = lambda z: norm.cdf(z)
+        return self._over_range(cdf, roots)
 
     def _init_grid_from_most_probable(self, prev_grid, prev_proba):
         most_probable = np.argmax(prev_proba)
@@ -259,8 +262,13 @@ class Quantizer():
 
     def _get_voronoi_roots(self, prev_grid, grid):
         v = self._get_voronoi(grid)
+        # First (non-zero) voronoi point must be above lower variance bound
+        assert v[0,1]>self._get_minimal_variance(prev_grid)
         roots = self.model.one_step_roots(prev_grid, v)
         return roots
+
+    def _get_minimal_variance(self, prev_grid):
+        return self.model.omega + self.model.beta*prev_grid[0]
 
     @staticmethod
     def _get_voronoi(grid):
