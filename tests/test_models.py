@@ -428,43 +428,49 @@ class TestGarchQuantizer(unittest.TestCase):
         return self.prev_proba.dot(dist).sum()
 
     def test_one_step_gradient(self):
-        # Value
-        value = self.quant._one_step_gradient(self.prev_grid_sorted,
-                self.prev_proba,
-                self.grid_sorted)
-        # Expected value
-        expected_value = pymaat.testing.jacobian_at(
-                self.marginal_distortion,
-                self.grid_sorted,
-                positive_arg=True)
-        # Assertion
-        np.testing.assert_allclose(value, expected_value)
+        gradient = partial(self.quant._one_step_gradient,
+                self.prev_grid_sorted,
+                self.prev_proba)
+        func = self.marginal_distortion
+        at = self.grid_sorted
+        pymaat.testing.assert_is_gradient_at(gradient, func, at)
 
-    def test_transformation(self):
-        # Transformation is allowed to become numerically unstable
-        # outside [-400,400]
-        x = np.array(range(-400,400), float)
+    def test_trans_reverts(self):
+        x = np.array([-0.213,0.432,0.135,0.542])
         grid = self.quant._optim_inv_transform(x, self.prev_grid_sorted)
         x_ = self.quant._optim_transform(grid, self.prev_grid_sorted)
         np.testing.assert_allclose(x, x_)
 
+    def assert_inv_trans_is_in_space_for(self, x):
+        x = np.array(x)
+        grid = self.quant._optim_inv_transform(x, self.prev_grid_sorted)
+        h_ = self.quant._get_minimal_variance(self.prev_grid_sorted)
+        np.testing.assert_equal(np.diff(grid)>0, True,
+                err_msg = 'is not sorted')
+        self.assertTrue(grid[1]>h_)
+        self.assertTrue(0.5*(grid[0]+grid[1])>h_)
+
+    def test_inv_trans_is_in_space(self):
+        self.assert_inv_trans_is_in_space_for([-0.213,0.432,0.135,0.542])
+        self.assert_inv_trans_is_in_space_for([-5.123,-3.243,5.234,2.313])
+        self.assert_inv_trans_is_in_space_for([3.234,-6.3123,-5.123,0.542])
+
+    def test_trans_jacobian(self):
+        x = np.array([-0.213,0.432,0.135,0.542])
+        grid = self.quant._optim_jacobian(x, self.prev_grid_sorted)
+        self.fail()
+
     def test_one_step_gradient_transformed(self):
-        # Value
-        value = self.quant._one_step_gradient_transformed(
-                self.prev_grid_sorted,
-                self.prev_proba,
-                np.log(self.grid_sorted))
-        # Expected value
         def marginal_distortion_transformed(x):
             grid = self.quant._optim_inv_transform(x, self.prev_grid_sorted)
             return self.marginal_distortion(grid)
-        init_x = self.quant._optim_transform(
-                self.grid_sorted, self.prev_grid_sorted)
-        expected_value = pymaat.testing.jacobian_at(
-                marginal_distortion_transformed,
-                init_x)
-        # Assertion
-        np.testing.assert_allclose(value, expected_value)
+        gradient = partial(self.quant._one_step_gradient_transformed,
+                self.prev_grid_sorted,
+                self.prev_proba)
+        func = marginal_distortion_transformed
+        at = self.quant._optim_transform(
+            self.grid_sorted, self.prev_grid_sorted)
+        pymaat.testing.assert_is_gradient_at(gradient, func, at)
 
     def test_init_grid_from_most_probable(self):
         init_grid = self.quant._init_grid_from_most_probable(

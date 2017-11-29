@@ -187,25 +187,47 @@ class Quantizer():
         # print(x)
         grid = self._optim_inv_transform(x, prev_grid)
         gradient = self._one_step_gradient(prev_grid, prev_proba, grid)
-        # ddist/dx(Grid) = dsist/dgrid * dgrid/dx(grid)
-        #                  = ddist/dgrid * grid
-        gradient_wrt_log_grid = gradient * grid
+        jacobian = self._optim_jacobian(x, prev_grid)
         assert not np.any(np.isnan(gradient))
-        # print(gradient_wrt_log_grid)
-        # Catch limit case
-        if 0.5 * (grid[0]+grid[1]) < self._get_minimal_variance(prev_grid):
-            # Numerical hack to avoid leaving relevant space
-            gradient_wrt_log_grid[0] = np.finfo().max
-        return gradient_wrt_log_grid
+        gradient_wrt_x = gradient.dot(jacobian)
+        assert not np.any(np.isnan(gradient_wrt_x))
+        return gradient_wrt_x
 
+    # TODO: wrap 3 following methods in reparametrization object
     def _optim_transform(self, grid, prev_grid):
-        x = np.log(grid)
+        assert grid.ndim == 1
+        assert prev_grid.ndim == 1
+        assert grid.size == self.nquant
+        assert prev_grid.size == self.nquant
+        h_ = self._get_minimal_variance(prev_grid)
+        x = np.empty_like(grid)
+        x[0] = np.arctanh((grid[0]-h_)/(grid[1]-h_))
+        x[1] = np.log(grid[1]-h_)
+        x[2:] = np.log(grid[2:]-grid[1:-1])
         assert np.all(np.isfinite(x))
         return x
 
     def _optim_inv_transform(self, x, prev_grid):
-        grid = np.exp(x)
+        assert x.ndim == 1
+        assert prev_grid.ndim == 1
+        assert x.size == self.nquant
+        assert prev_grid.size == self.nquant
+        h_ = self._get_minimal_variance(prev_grid)
+        grid = np.empty_like(x)
+        grid[0] = np.tanh(x[0])*np.exp(x[1])
+        grid[1:] = np.cumsum(np.exp(x[1:]))
+        grid = grid + h_
+        assert np.all(np.isfinite(grid))
         return grid
+
+    def _optim_jacobian(self, x, prev_grid):
+        j = np.zeros((self.nquant, self.nquant), float)
+        j[0,0] = np.exp(x[1])*(1-np.tanh(x[0])**2.)
+        j[0,1] = np.exp(x[1])*np.tanh(x[0])
+        sub_j = np.exp(x[1:][np.newaxis,:])
+        sub_mask = np.tril(np.ones((self.nquant-1, self.nquant-1), float))
+        j[1:,1:] = sub_j*sub_mask
+        return j
 
     def _one_step_gradient(self, prev_grid, prev_proba, grid):
         # Warm-up for broadcasting
