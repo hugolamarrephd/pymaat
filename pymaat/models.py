@@ -177,24 +177,24 @@ class Quantizer():
                 prev_grid,
                 prev_proba)
         init_grid = self._init_grid_from_most_probable(prev_grid, prev_proba)
-        init_x = self._optim_transform(init_grid, prev_grid)
-        sol = scipy.optimize.newton_krylov(func_to_optimize, init_x)
-                # f_tol=1e-19, line_search='wolfe')
-        opt_grid = self._optim_inv_transform(np.sort(sol), prev_grid)
-        return (True, opt_grid)
+        init_x = self._optim_transform(prev_grid, init_grid)
+        sol = scipy.optimize.root(func_to_optimize, init_x, tol=1e-16)
+        opt_grid = self._optim_inv_transform(prev_grid, np.sort(sol.x))
+        return (sol.success, opt_grid)
 
     def _one_step_gradient_transformed(self, prev_grid, prev_proba, x):
-        # print(x)
-        grid = self._optim_inv_transform(x, prev_grid)
+        grid = self._optim_inv_transform(prev_grid, x)
+        print_as_vol(np.diff(grid))
         gradient = self._one_step_gradient(prev_grid, prev_proba, grid)
-        jacobian = self._optim_jacobian(x, prev_grid)
+        jacobian = self._optim_jacobian(prev_grid, x)
         assert not np.any(np.isnan(gradient))
         gradient_wrt_x = gradient.dot(jacobian)
         assert not np.any(np.isnan(gradient_wrt_x))
+        print(gradient_wrt_x)
         return gradient_wrt_x
 
     # TODO: wrap 3 following methods in reparametrization object
-    def _optim_transform(self, grid, prev_grid):
+    def _optim_transform(self, prev_grid, grid):
         assert grid.ndim == 1
         assert prev_grid.ndim == 1
         assert grid.size == self.nquant
@@ -207,7 +207,7 @@ class Quantizer():
         assert np.all(np.isfinite(x))
         return x
 
-    def _optim_inv_transform(self, x, prev_grid):
+    def _optim_inv_transform(self, prev_grid, x):
         assert x.ndim == 1
         assert prev_grid.ndim == 1
         assert x.size == self.nquant
@@ -220,7 +220,7 @@ class Quantizer():
         assert np.all(np.isfinite(grid))
         return grid
 
-    def _optim_jacobian(self, x, prev_grid):
+    def _optim_jacobian(self, prev_grid, x):
         j = np.zeros((self.nquant, self.nquant), float)
         j[0,0] = np.exp(x[1])*(1-np.tanh(x[0])**2.)
         j[0,1] = np.exp(x[1])*np.tanh(x[0])
@@ -285,7 +285,7 @@ class Quantizer():
     def _get_voronoi_roots(self, prev_grid, grid):
         v = self._get_voronoi(grid)
         # First (non-zero) voronoi point must be above lower variance bound
-        assert v[0,1]>self._get_minimal_variance(prev_grid)
+        assert v[0,1]>=self._get_minimal_variance(prev_grid)
         roots = self.model.one_step_roots(prev_grid, v)
         return roots
 

@@ -51,29 +51,29 @@ class TestTimeseriesGarchFixture():
         simulated_variances, simulated_returns = self.timeseries_simulate()
         filtered_variances, filtered_innovations = \
                 self.timeseries_filter(returns=simulated_returns)
-        np.testing.assert_allclose(simulated_variances, filtered_variances)
-        np.testing.assert_allclose(self.__innovations, filtered_innovations)
+        self.assert_almost_equal(simulated_variances, filtered_variances)
+        self.assert_almost_equal(self.__innovations, filtered_innovations)
 
     def test_filter_initialize_variance(self):
         filtered_variance, _ = self.timeseries_filter()
-        np.testing.assert_allclose(filtered_variance[0],
+        self.assert_almost_equal(filtered_variance[0],
                 self.__first_variance)
 
     def test_filter_simulate_variance(self):
         simulated_variance, _ = self.timeseries_simulate()
-        np.testing.assert_allclose(simulated_variance[0],
+        self.assert_almost_equal(simulated_variance[0],
                 self.__first_variance)
 
     def test_filter_size(self):
         next_variances, innovations = self.timeseries_filter()
-        self.assertEqual(
+        self.assert_equal(
                 next_variances.shape,
                 (self.__shape[0]+1,) + self.__shape[1:])
-        self.assertEqual(innovations.shape, self.__shape)
+        self.assert_equal(innovations.shape, self.__shape)
 
     def test_filter_positive_variance(self):
         variances,_ = self.timeseries_filter()
-        np.testing.assert_array_equal(variances>0, True)
+        self.assert_equal(variances>0, True)
 
     def test_filter_throws_exception_when_non_positive_variance(self):
         with self.assertRaises(ValueError):
@@ -83,13 +83,13 @@ class TestTimeseriesGarchFixture():
 
     def test_simulate_size(self):
         variances, returns = self.timeseries_simulate()
-        self.assertEqual(variances.shape,
+        self.assert_equal(variances.shape,
                 (self.__shape[0]+1,) + self.__shape[1:])
-        self.assertEqual(returns.shape, self.__shape)
+        self.assert_equal(returns.shape, self.__shape)
 
     def test_simulate_positive_variance(self):
         variances,_ = self.timeseries_simulate()
-        np.testing.assert_array_equal(variances>0, True)
+        self.assert_equal(variances>0, True)
 
     def test_simulate_throws_exception_when_non_positive_variance(self):
         with self.assertRaises(ValueError):
@@ -156,11 +156,11 @@ class TestOneStepGarchFixture():
             if isinstance(out, tuple):
                 for o in out:
                     msg_ = 'Func was {}, Type was: {}'.format(f, type(o))
-                    self.assertTrue(type(o) in allowed_primitives,
+                    self.assert_true(type(o) in allowed_primitives,
                             msg=msg_)
             else:
                 msg_ = 'Func was {}, Type was: {}'.format(f, type(out))
-                self.assertTrue(type(out) in allowed_primitives,
+                self.assert_true(type(out) in allowed_primitives,
                             msg=msg_)
 
     def test_all_funcs_support_array(self):
@@ -171,9 +171,9 @@ class TestOneStepGarchFixture():
             out = f(self.__innovations, self.__variances)
             if isinstance(out, tuple):
                 for o in out:
-                    self.assertEqual(o.shape, self.__shape, msg=msg_)
+                    self.assert_equal(o.shape, self.__shape, msg=msg_)
             else:
-                self.assertEqual(out.shape, self.__shape, msg=msg_)
+                self.assert_equal(out.shape, self.__shape, msg=msg_)
 
     def test_all_one_step_funcs_support_broadcasting(self):
         for f in self.get_one_step_funcs():
@@ -184,10 +184,10 @@ class TestOneStepGarchFixture():
                     self.__variances_broadcast)
             if isinstance(out, tuple):
                 for o in out:
-                    self.assertEqual(o.shape, self.__shape_broadcast,
+                    self.assert_equal(o.shape, self.__shape_broadcast,
                             msg=msg_)
             else:
-                self.assertEqual(out.shape, self.__shape_broadcast, msg=msg_)
+                self.assert_equal(out.shape, self.__shape_broadcast, msg=msg_)
 
     # One-step filter
 
@@ -201,23 +201,23 @@ class TestOneStepGarchFixture():
         simulated_variances, simulated_returns = self.one_step_simulate()
         filtered_variances, filtered_innovations = self.one_step_filter(
                 returns=simulated_returns)
-        np.testing.assert_allclose(simulated_variances, filtered_variances)
-        np.testing.assert_allclose(self.__innovations, filtered_innovations)
+        self.assert_almost_equal(simulated_variances, filtered_variances)
+        self.assert_almost_equal(self.__innovations, filtered_innovations)
 
     def test_one_step_filter_positive_variance(self):
         next_variances, _ = self.one_step_filter()
-        np.testing.assert_array_equal(next_variances>0, True)
+        self.assert_equal(next_variances>0, True)
 
     def test_one_step_simulate_positive_variance(self):
         next_variances, _ = self.one_step_simulate()
-        np.testing.assert_array_equal(next_variances>0, True)
+        self.assert_equal(next_variances>0, True)
 
     # TODO: send to estimator
     # def test_neg_log_like_at_few_values(self):
     #     nll = self.model.negative_log_likelihood(1, 1)
-    #     self.assertAlmostEqual(nll, 0.5)
+    #     self.assert_almost_equal(nll, 0.5)
     #     nll = self.model.negative_log_likelihood(0, np.exp(1))
-    #     self.assertAlmostEqual(nll, 0.5)
+    #     self.assert_almost_equal(nll, 0.5)
 
     # One-step innovation roots
 
@@ -230,8 +230,8 @@ class TestOneStepGarchFixture():
         for (z,s) in zip((left_roots, right_roots), ('left', 'right')):
             next_variances_solved, _ = self.model.one_step_simulate(
                 z, self.__variances)
-            np.testing.assert_allclose(next_variances_solved, next_variances,
-                    err_msg = 'Invalid ' + s + ' roots.')
+            self.assert_almost_equal(next_variances_solved, next_variances,
+                    msg='Invalid ' + s + ' roots.')
 
     def get_lowest_one_step_variance(self):
         return self.model._get_lowest_one_step_variance(self.__variances)
@@ -242,33 +242,33 @@ class TestOneStepGarchFixture():
         left_roots, right_roots = self.model.one_step_roots(
                 self.__variances,
                 next_variances)
-        np.testing.assert_equal(left_roots<right_roots, True)
+        self.assert_equal(left_roots<right_roots, True)
 
     def test_roots_nan_when_below_lowest(self):
         variances_at_singularity = self.get_lowest_one_step_variance()
         impossible_variances = variances_at_singularity - 1e-5
         left_roots, right_roots = self.model.one_step_roots(
                 self.__variances, impossible_variances)
-        np.testing.assert_equal(left_roots, np.nan)
-        np.testing.assert_equal(right_roots, np.nan)
+        self.assert_equal(left_roots, np.nan)
+        self.assert_equal(right_roots, np.nan)
 
     def test_same_roots_at_singularity(self):
         variances_at_singularity = self.get_lowest_one_step_variance()
         left_roots, right_roots = self.model.one_step_roots(
                 self.__variances, variances_at_singularity)
-        np.testing.assert_allclose(left_roots, right_roots)
+        self.assert_almost_equal(left_roots, right_roots)
 
     def test_roots_at_inf_are_pm_inf(self):
         [left_root, right_root] = self.model.one_step_roots(
                 self.__variances, np.inf)
-        np.testing.assert_equal(left_root, -np.inf)
-        np.testing.assert_equal(right_root, np.inf)
+        self.assert_equal(left_root, -np.inf)
+        self.assert_equal(right_root, np.inf)
 
     def test_roots_at_zero_are_nan(self):
         [left_root, right_root] = self.model.one_step_roots(
                 self.__variances, 0)
-        np.testing.assert_equal(left_root, np.nan)
-        np.testing.assert_equal(right_root, np.nan)
+        self.assert_equal(left_root, np.nan)
+        self.assert_equal(right_root, np.nan)
 
     # One-step variance integration
 
@@ -282,13 +282,13 @@ class TestOneStepGarchFixture():
         expected_value = integrate.quad(to_integrate, from_, to_)
         value = (self.model.one_step_expectation_until(variance, to_)
                 - self.model.one_step_expectation_until(variance, from_))
-        self.assertAlmostEqual(value, expected_value[0])
+        self.assert_almost_equal(value, expected_value[0])
 
     def test_one_step_integrate_zero_at_minf(self):
         variance = 1e-4
         value_at_minf = self.model.one_step_expectation_until(
                 variance, -np.inf)
-        self.assertAlmostEqual(value_at_minf, 0)
+        self.assert_almost_equal(value_at_minf, 0)
 
     def test_one_step_integrate_zero_at_inf(self):
         variance = 1e-4
@@ -296,11 +296,11 @@ class TestOneStepGarchFixture():
         expected_value = (self.model.omega + self.model.alpha
                 + (self.model.beta+
                 self.model.alpha*self.model.gamma**2) * variance)
-        self.assertAlmostEqual(value_at_inf, expected_value)
+        self.assert_almost_equal(value_at_inf, expected_value)
 
 class TestGarch(TestTimeseriesGarchFixture,
         TestOneStepGarchFixture,
-        unittest.TestCase):
+        pymaat.testing.TestCase):
 
     model = pymaat.models.Garch(
             mu=2.01,
@@ -311,19 +311,19 @@ class TestGarch(TestTimeseriesGarchFixture,
 
     def test_one_step_filter_at_few_values(self):
         next_var, innov = self.model.one_step_filter(0, 1)
-        self.assertAlmostEqual(innov, 0.5-self.model.mu)
-        self.assertAlmostEqual(next_var,
+        self.assert_almost_equal(innov, 0.5-self.model.mu)
+        self.assert_almost_equal(next_var,
                   self.model.omega
                 + self.model.beta
                 + self.model.alpha * (innov - self.model.gamma) ** 2)
 
     def test_one_step_simulate_at_few_values(self):
         next_var, ret = self.model.one_step_simulate(0, 0)
-        self.assertAlmostEqual(ret, 0)
-        self.assertAlmostEqual(next_var, self.model.omega)
+        self.assert_almost_equal(ret, 0)
+        self.assert_almost_equal(next_var, self.model.omega)
         next_var, ret = self.model.one_step_simulate(0, 1)
-        self.assertAlmostEqual(ret, self.model.mu-0.5)
-        self.assertAlmostEqual(next_var,
+        self.assert_almost_equal(ret, self.model.mu-0.5)
+        self.assert_almost_equal(next_var,
                   self.model.omega
                 + self.model.beta
                 + self.model.alpha * self.model.gamma ** 2)
@@ -337,7 +337,7 @@ class TestGarch(TestTimeseriesGarchFixture,
                 beta=0.5,
                 gamma=1)
 
-class TestGarchQuantizer(unittest.TestCase):
+class TestGarchQuantizer(pymaat.testing.TestCase):
 
     model = pymaat.models.Garch(
             mu=2.01,
@@ -361,24 +361,24 @@ class TestGarchQuantizer(unittest.TestCase):
             1e-4))
 
     def test_init(self):
-        self.assertEqual(self.quant.nper, self.nper)
-        self.assertEqual(self.quant.nquant, self.nquant)
+        self.assert_equal(self.quant.nper, self.nper)
+        self.assert_equal(self.quant.nquant, self.nquant)
 
     def test_initialize(self):
         first_variance = 1e-4
         grid, proba, trans = self.quant._initialize(first_variance)
         # Shapes
-        self.assertEqual(grid.shape, (self.nper+1, self.nquant))
-        self.assertEqual(proba.shape, (self.nper+1, self.nquant))
-        self.assertEqual(trans.shape, (self.nper, self.nquant, self.nquant))
+        self.assert_equal(grid.shape, (self.nper+1, self.nquant))
+        self.assert_equal(proba.shape, (self.nper+1, self.nquant))
+        self.assert_equal(trans.shape, (self.nper, self.nquant, self.nquant))
         # First grid
-        np.testing.assert_array_equal(grid[0,1:]==first_variance, True)
+        self.assert_equal(grid[0,1:]==first_variance, True)
 
     def test_get_voronoi_2d(self):
         v = self.quant._get_voronoi(np.array(
                 [[1,2,3],
                 [11,12,13]]))
-        np.testing.assert_allclose(v, np.array(
+        self.assert_almost_equal(v, np.array(
                 [[0,1.5,2.5,np.inf],
                 [0,11.5,12.5,np.inf]]))
 
@@ -419,36 +419,21 @@ class TestGarchQuantizer(unittest.TestCase):
         expected_value = np.empty_like(value)
         for (ev,pg) in zip(expected_value, self.prev_grid_sorted):
             ev[:] = self.quantized_integral('gradient', pg, self.grid_sorted)
-        np.testing.assert_allclose(value, expected_value)
-
-    def marginal_distortion(self, grid):
-        dist = np.empty((self.nquant, self.nquant))
-        for (i,pg) in enumerate(self.prev_grid_sorted):
-             dist[i] = self.quantized_integral('distortion', pg, grid)
-        return self.prev_proba.dot(dist).sum()
-
-    def test_one_step_gradient(self):
-        gradient = partial(self.quant._one_step_gradient,
-                self.prev_grid_sorted,
-                self.prev_proba)
-        func = self.marginal_distortion
-        at = self.grid_sorted
-        pymaat.testing.assert_is_gradient_at(gradient, func, at)
+        self.assert_almost_equal(value, expected_value)
 
     def test_trans_reverts(self):
         x = np.array([-0.213,0.432,0.135,0.542])
-        grid = self.quant._optim_inv_transform(x, self.prev_grid_sorted)
-        x_ = self.quant._optim_transform(grid, self.prev_grid_sorted)
-        np.testing.assert_allclose(x, x_)
+        grid = self.quant._optim_inv_transform(self.prev_grid_sorted, x)
+        x_ = self.quant._optim_transform(self.prev_grid_sorted, grid)
+        self.assert_almost_equal(x, x_)
 
     def assert_inv_trans_is_in_space_for(self, x):
         x = np.array(x)
-        grid = self.quant._optim_inv_transform(x, self.prev_grid_sorted)
+        grid = self.quant._optim_inv_transform(self.prev_grid_sorted, x)
         h_ = self.quant._get_minimal_variance(self.prev_grid_sorted)
-        np.testing.assert_equal(np.diff(grid)>0, True,
-                err_msg = 'is not sorted')
-        self.assertTrue(grid[1]>h_)
-        self.assertTrue(0.5*(grid[0]+grid[1])>h_)
+        self.assert_equal(np.diff(grid)>0, True, msg='is not sorted')
+        self.assert_true(grid[1]>h_)
+        self.assert_true(0.5*(grid[0]+grid[1])>h_)
 
     def test_inv_trans_is_in_space(self):
         self.assert_inv_trans_is_in_space_for([-0.213,0.432,0.135,0.542])
@@ -457,48 +442,52 @@ class TestGarchQuantizer(unittest.TestCase):
 
     def test_trans_jacobian(self):
         x = np.array([-0.213,0.432,0.135,0.542])
-        grid = self.quant._optim_jacobian(x, self.prev_grid_sorted)
-        self.fail()
+        jac = partial(self.quant._optim_jacobian, self.prev_grid_sorted)
+        func = partial(self.quant._optim_inv_transform, self.prev_grid_sorted)
+        self.assert_jacobian_at(jac, func, x, rtol=1e-6, atol=1e-8)
 
     def test_one_step_gradient_transformed(self):
         def marginal_distortion_transformed(x):
-            grid = self.quant._optim_inv_transform(x, self.prev_grid_sorted)
-            return self.marginal_distortion(grid)
+            grid = self.quant._optim_inv_transform(self.prev_grid_sorted, x)
+            dist = np.empty((self.nquant, self.nquant))
+            for (i,pg) in enumerate(self.prev_grid_sorted):
+                 dist[i] = self.quantized_integral('distortion', pg, grid)
+            return self.prev_proba.dot(dist).sum()
         gradient = partial(self.quant._one_step_gradient_transformed,
                 self.prev_grid_sorted,
                 self.prev_proba)
         func = marginal_distortion_transformed
-        at = self.quant._optim_transform(
-            self.grid_sorted, self.prev_grid_sorted)
-        pymaat.testing.assert_is_gradient_at(gradient, func, at)
+        at = self.quant._optim_transform(self.prev_grid_sorted,
+            self.grid_sorted)
+        self.assert_gradient_at(gradient, func, at, rtol=1e-2)
 
     def test_init_grid_from_most_probable(self):
         init_grid = self.quant._init_grid_from_most_probable(
                 self.prev_grid_sorted, self.prev_proba)
-        self.assertTrue(init_grid.shape==(self.nquant,))
-        np.testing.assert_array_equal(init_grid>0, True)
-        np.testing.assert_array_equal(np.diff(init_grid)>0, True)
-        self.assertTrue(init_grid[0]<self.prev_grid_sorted[self.most_proba])
-        self.assertTrue(init_grid[-1]>self.prev_grid_sorted[self.most_proba])
+        self.assert_true(init_grid.shape==(self.nquant,))
+        self.assert_equal(init_grid>0, True)
+        self.assert_equal(np.diff(init_grid)>0, True)
+        self.assert_true(init_grid[0]<self.prev_grid_sorted[self.most_proba])
+        self.assert_true(init_grid[-1]>self.prev_grid_sorted[self.most_proba])
 
     def test_get_init_innov_is_sorted(self):
         init = self.quant._get_init_innov(self.nquant)
-        np.testing.assert_array_equal(np.diff(init)>0, True)
+        self.assert_equal(np.diff(init)>0, True)
         # More concentrated in center
         diff_center = init[0,2]-init[0,1]
         diff_first = init[0,1]-init[0,0]
         diff_last = init[0,3]-init[0,2]
-        self.assertTrue(diff_center<diff_first)
-        self.assertTrue(diff_center<diff_last)
+        self.assert_true(diff_center<diff_first)
+        self.assert_true(diff_center<diff_last)
 
     def test_trans_proba_size(self):
         trans = self.quant._transition_probability(self.prev_grid_sorted, self.grid_sorted)
-        self.assertEqual(trans.shape, (self.nquant, self.nquant))
+        self.assert_equal(trans.shape, (self.nquant, self.nquant))
 
     def test_trans_proba_sum_to_one_and_non_negative(self):
         trans = self.quant._transition_probability(self.prev_grid_sorted, self.grid_sorted)
-        np.testing.assert_array_equal(trans>=0, True)
-        np.testing.assert_allclose(np.sum(trans,axis=1),1)
+        self.assert_equal(trans>=0, True)
+        self.assert_almost_equal(np.sum(trans,axis=1),1)
 
     def test_trans_proba(self):
         value = self.quant._transition_probability(
@@ -508,19 +497,19 @@ class TestGarchQuantizer(unittest.TestCase):
         for (i,pg) in enumerate(self.prev_grid_sorted):
             expected_value[i] = self.quantized_integral(
                     'pdf', pg, self.grid_sorted)
-        np.testing.assert_allclose(value, expected_value)
+        self.assert_almost_equal(value, expected_value)
 
     def test_transition_probability_from_first_grid(self):
         first_variance = 1e-4
         grid, *_ = self.quant._initialize(first_variance)
         trans = self.quant._transition_probability(grid[0],self.grid_sorted)
         first_row = trans[0]
-        np.testing.assert_array_equal(trans==first_row, True)
+        self.assert_equal(trans==first_row, True)
 
     # def test_one_step_quantize_sorted(self):
     #     (_, new_grid) = self.quant._one_step_quantize(
     #             self.prev_grid_sorted, self.prev_proba)
-    #     np.testing.assert_allclose(new_grid, np.sort(new_grid))
+    #     self.assert_almost_equal(new_grid, np.sort(new_grid))
 
 #     def test_quantize(self):
 #         quant = pymaat.models.Quantizer(self.model)

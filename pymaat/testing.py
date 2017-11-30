@@ -1,37 +1,44 @@
+import unittest
+
 import numpy as np
-import scipy.misc
 
-EPSILON = np.power(np.finfo(float).eps, 1/3)
+import pymaat.findiff
 
-def derivative_at(func, x):
-    x = np.atleast_1d(x)
-    dx = np.maximum(np.abs(x),1.)*EPSILON
-    dx = dx.mean() #Handles multiple value
-    return scipy.misc.derivative(func, x, dx=dx, order=5)
 
-def gradient_at(func, x):
-    assert np.atleast_1d(func(x)).size==1
-    grad = np.empty_like(x)
-    for (i,x_) in enumerate(x):
-        def func_1d(x_scalar):
-            xcopy = x.copy()
-            xcopy[i] = x_scalar
-            return func(xcopy)
-        grad[i] = derivative_at(func_1d, x_)
-    return grad
+class TestCase(unittest.TestCase):
+    '''
+    rtol and atol are too critical to be set by default.
+    '''
+    # Light wrapper around np.testing
+    def assert_equal(self, a, b, msg=None):
+        # Overrides unittest.TestCase to support numpy arrays
+        np.testing.assert_equal(a, b, err_msg=msg)
 
-def jacobian_at():
-    pass
+    def assert_true(self, a, msg=None):
+        self.assert_equal(a, True, msg=msg)
 
-def assert_is_derivative_at(derivative, func, at):
-    value = derivative(at)
-    expected_value = derivative_at(func, at)
-    np.testing.assert_allclose(value, expected_value, rtol=EPSILON)
+    def assert_false(self, a, msg=None):
+        self.assert_equal(a, False, msg=msg)
 
-def assert_is_gradient_at(gradient, func, at):
-    value = gradient(at)
-    expected_value = gradient_at(func, at)
-    np.testing.assert_allclose(value, expected_value, rtol=EPSILON)
+    def assert_almost_equal(self, a, b, *, rtol=1e-6, atol=0, msg=None):
+        # Overrides unittest.TestCase to support numpy arrays
+        np.testing.assert_allclose(a, b, rtol=rtol, atol=atol, err_msg=msg)
 
-def assert_is_jacobian(func, jacobian):
-    pass
+    # Derivative test utilities
+    def assert_derivative_at(self, derivative, func, at, rtol=1e-6, atol=0):
+        value = derivative(at)
+        expected_value = pymaat.findiff.derivative_at(func, at)
+        self.assert_almost_equal(value, expected_value, rtol=rtol, atol=atol,
+                msg='Incorrect derivative')
+
+    def assert_gradient_at(self, gradient, func, at, rtol=1e-6, atol=0):
+        value = gradient(at)
+        expected_value = pymaat.findiff.gradient_at(func, at)
+        self.assert_almost_equal(value, expected_value, rtol=rtol, atol=atol,
+                msg='Incorrect gradient')
+
+    def assert_jacobian_at(self, jacobian, func, at, rtol=1e-6, atol=0):
+        value = jacobian(at)
+        expected_value = pymaat.findiff.jacobian_at(func, at)
+        self.assert_almost_equal(value, expected_value, rtol=rtol, atol=atol,
+                msg='Incorrect jacobian')
