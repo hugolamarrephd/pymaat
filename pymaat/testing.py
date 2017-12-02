@@ -1,6 +1,7 @@
 import unittest
 
 import numpy as np
+import scipy.integrate as integrate
 
 import pymaat.findiff
 
@@ -35,10 +36,26 @@ class TestCase(unittest.TestCase):
         value = gradient(at)
         expected_value = pymaat.findiff.gradient_at(func, at)
         self.assert_almost_equal(value, expected_value, rtol=rtol, atol=atol,
-                msg='Incorrect gradient')
+                msg=f'Incorrect gradient at {at}')
 
     def assert_jacobian_at(self, jacobian, func, at, rtol=1e-6, atol=0):
         value = jacobian(at)
         expected_value = pymaat.findiff.jacobian_at(func, at)
         self.assert_almost_equal(value, expected_value, rtol=rtol, atol=atol,
-                msg='Incorrect jacobian')
+                msg=f'Incorrect jacobian at {at}')
+
+    # Integral test utilities
+    def assert_integral_until(self, integral, func, until,
+            lower_bound = -np.inf,
+            rtol=1e-6, atol=0):
+        value = integral(until)
+        expected_value = np.empty_like(until)
+        for (i,u) in enumerate(until):
+            expected_value[i], *_ = integrate.quad(
+                    func, lower_bound, u)
+        self.assert_almost_equal(value, expected_value, rtol=rtol, atol=atol,
+                msg='Incorrect integral')
+
+    def assert_is_integral_until(self, integral, lower_bound=-np.inf):
+        self.assert_equal(integral(lower_bound), 0,
+                msg='Integral until lower bound is non-zero')

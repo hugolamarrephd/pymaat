@@ -8,6 +8,10 @@ from scipy.stats import norm
 import pymaat.testing
 import pymaat.models
 
+# Test on daily scale
+VAR_LEVEL = 0.18**2./252.
+VOL_LEVEL = np.sqrt(VAR_LEVEL)
+RET_EXP = 0.06/252.
 
 class TestTimeseriesGarchFixture():
 
@@ -21,9 +25,9 @@ class TestTimeseriesGarchFixture():
            [[-0.22774868,  0.74240245,  1.11521215,  1.10464703],
             [-0.56968483,  0.54138324, -0.69508153, -0.14254879]]])
 
-    __returns = __innovations * np.sqrt(1e-4) + 1e-3
+    __returns = __innovations * VOL_LEVEL + RET_EXP
 
-    __variances =  1e-4 * np.array(
+    __variances = VAR_LEVEL  * np.array(
             [[[ 3.40880883,  1.50217308,  1.11125856,  0.14462167],
             [ 0.08321133,  0.36507093,  1.52133949,  1.42666615]],
 
@@ -108,9 +112,9 @@ class TestOneStepGarchFixture():
             [-1.67960499,  0.02364286,  0.28870878,  0.01871441],
             [ 1.71135472,  0.7167683 , -0.93715744, -0.8482234 ]]])
 
-    __returns = __innovations * np.sqrt(1e-4) + 1e-3
+    __returns = __innovations * VOL_LEVEL + RET_EXP
 
-    __variances =  1e-4 * np.array(
+    __variances =  VAR_LEVEL * np.array(
             [[[ 0.3217341 ,  0.00868056,  1.22722262,  0.58144423],
             [ 0.54204103,  3.68888772,  0.77486123,  0.95989976],
             [ 0.90888372,  0.07370864,  2.91764007,  2.21766175]],
@@ -132,7 +136,7 @@ class TestOneStepGarchFixture():
             [-1.27985463],
             [ 0.12262462]])
 
-    __variances_broadcast =  1e-4 * np.array([[ 2.70588279,  0.96680575,
+    __variances_broadcast =  VAR_LEVEL * np.array([[ 2.70588279,  0.96680575,
             0.09027765, 1.23017577,  1.14468471]])
 
     __shape_broadcast = (__innovations_broadcast.shape[0],
@@ -212,12 +216,6 @@ class TestOneStepGarchFixture():
         next_variances, _ = self.one_step_simulate()
         self.assert_equal(next_variances>0, True)
 
-    # TODO: send to estimator
-    # def test_neg_log_like_at_few_values(self):
-    #     nll = self.model.negative_log_likelihood(1, 1)
-    #     self.assert_almost_equal(nll, 0.5)
-    #     nll = self.model.negative_log_likelihood(0, np.exp(1))
-    #     self.assert_almost_equal(nll, 0.5)
 
     # One-step innovation roots
 
@@ -271,32 +269,33 @@ class TestOneStepGarchFixture():
         self.assert_equal(right_root, np.nan)
 
     # One-step variance integration
-
-    def test_one_step_integrate(self):
-        from_ = -0.534
-        to_ = 0.123
-        variance = 1e-4
-        def to_integrate(z):
-            (h, _) = self.model.one_step_simulate(z, variance)
+    __test_expectation_values = np.array(
+            [0.123,-0.542,-1.3421,1.452,-3.412,5.234])
+    def test_one_step_expectation_until(self):
+        def func_to_integrate(z):
+            (h, _) = self.model.one_step_simulate(z, VAR_LEVEL)
             return h * norm.pdf(z)
-        expected_value = integrate.quad(to_integrate, from_, to_)
-        value = (self.model.one_step_expectation_until(variance, to_)
-                - self.model.one_step_expectation_until(variance, from_))
-        self.assert_almost_equal(value, expected_value[0])
+        integral = partial(self.model.one_step_expectation_until, VAR_LEVEL)
+        self.assert_integral_until(integral, func_to_integrate,
+                self.__test_expectation_values, rtol=1e-1)
 
-    def test_one_step_integrate_zero_at_minf(self):
-        variance = 1e-4
-        value_at_minf = self.model.one_step_expectation_until(
-                variance, -np.inf)
-        self.assert_almost_equal(value_at_minf, 0)
+    def test_one_step_expectation_is_integral_until(self):
+        integral = partial(self.model.one_step_expectation_until, VAR_LEVEL)
+        self.assert_is_integral_until(integral)
 
-    def test_one_step_integrate_zero_at_inf(self):
-        variance = 1e-4
-        value_at_inf = self.model.one_step_expectation_until(variance)
-        expected_value = (self.model.omega + self.model.alpha
-                + (self.model.beta+
-                self.model.alpha*self.model.gamma**2) * variance)
-        self.assert_almost_equal(value_at_inf, expected_value)
+    def test_one_step_expectation_squared_until(self):
+        def func_to_integrate(z):
+            (h, _) = self.model.one_step_simulate(z, VAR_LEVEL)
+            return h**2. * norm.pdf(z)
+        integral = partial(self.model.one_step_expectation_until, VAR_LEVEL,
+                order=2)
+        self.assert_integral_until(integral, func_to_integrate,
+                self.__test_expectation_values, rtol=1e-4)
+
+    def test_one_step_expectation_squared_is_integral_until(self):
+        integral = partial(self.model.one_step_expectation_until, VAR_LEVEL,
+                order=2)
+        self.assert_is_integral_until(integral)
 
 class TestGarch(TestTimeseriesGarchFixture,
         TestOneStepGarchFixture,
@@ -337,6 +336,51 @@ class TestGarch(TestTimeseriesGarchFixture,
                 beta=0.5,
                 gamma=1)
 
+    def test_one_step_expectation_cdf_factor(self):
+        value = self.model._one_step_expectation_cdf_factor(VAR_LEVEL)
+        expected_value = (self.model.omega + self.model.alpha
+                + (self.model.beta+
+                self.model.alpha*self.model.gamma**2) * VAR_LEVEL)
+        self.assert_almost_equal(value, expected_value)
+
+    def test_one_step_expectation_squared_cdf_factor(self):
+        value = self.model._one_step_expectation_squared_cdf_factor(
+                VAR_LEVEL)
+        a = (self.model.omega +
+                (self.model.beta+self.model.alpha*self.model.gamma**2.)
+                *VAR_LEVEL)
+        b = 2.*self.model.alpha*self.model.gamma*VAR_LEVEL**0.5
+        c = self.model.alpha
+        expected_value = (a**2. + 2.*a*c + b**2. + 3.*c**2)
+        self.assert_almost_equal(value, expected_value)
+
+    def test_one_step_expectation_pdf_factor(self):
+        innovations = 1.453
+        value = self.model._one_step_expectation_pdf_factor(
+                VAR_LEVEL, innovations)
+        expected_value = (self.model.alpha * (2.*self.model.gamma*VOL_LEVEL-
+                innovations))
+        self.assert_almost_equal(value, expected_value)
+
+    def test_one_step_expectation_squared_pdf_factor(self):
+        z = 1.453
+        value = self.model._one_step_expectation_squared_pdf_factor(
+                VAR_LEVEL, z)
+        a = (self.model.omega +
+                (self.model.beta+self.model.alpha*self.model.gamma**2.)
+                *VAR_LEVEL)
+        b = 2.*self.model.alpha*self.model.gamma*VAR_LEVEL**0.5
+        c = self.model.alpha
+        expected_value = (2.*a*b - 2.*a*c*z - b**2.*z + 2.*b*c*(z**2.+2.)
+                -c**2.*z*(z**2.+3.))
+        self.assert_almost_equal(value, expected_value)
+
+    # TODO: send to estimator
+    # def test_neg_log_like_at_few_values(self):
+    #     nll = self.model.negative_log_likelihood(1, 1)
+    #     self.assert_almost_equal(nll, 0.5)
+    #     nll = self.model.negative_log_likelihood(0, np.exp(1))
+    #     self.assert_almost_equal(nll, 0.5)
 class TestGarchQuantizer(pymaat.testing.TestCase):
 
     model = pymaat.models.Garch(
@@ -387,6 +431,10 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
             func = lambda z,h,g: np.power(h-g,2) * norm.pdf(z)
         elif type_ == 'gradient':
             func = lambda z,h,g: (h-g) * norm.pdf(z)
+        elif type_ == 'model_squared':
+            func = lambda z,h,g: h**2. * norm.pdf(z)
+        elif type_ == 'model':
+            func = lambda z,h,g: h * norm.pdf(z)
         elif type_ == 'pdf':
             func = lambda z,h,g: norm.pdf(z)
         assert prev_grid.size==1
@@ -413,13 +461,27 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
             for (lb,ub,g) in zip(voronoi[:-1], voronoi[1:], grid)])
 
     def test_one_step_integrate(self):
-        value = self.quant._one_step_integrate(
+        I_0, I_1, I_2 = self.quant._one_step_integrate(
                 self.prev_grid_sorted[:,np.newaxis],
                 self.grid_sorted[np.newaxis,:])
-        expected_value = np.empty_like(value)
+        # Test I_0
+        expected_value = np.empty_like(I_0)
         for (ev,pg) in zip(expected_value, self.prev_grid_sorted):
-            ev[:] = self.quantized_integral('gradient', pg, self.grid_sorted)
-        self.assert_almost_equal(value, expected_value)
+            ev[:] = self.quantized_integral('pdf', pg, self.grid_sorted)
+        self.assert_almost_equal(I_0, expected_value, rtol=1e-4,
+                msg='Incorrect pdf integral (I0)')
+        # Test I_1
+        expected_value = np.empty_like(I_1)
+        for (ev,pg) in zip(expected_value, self.prev_grid_sorted):
+            ev[:] = self.quantized_integral('model', pg, self.grid_sorted)
+        self.assert_almost_equal(I_1, expected_value, rtol=1e-4,
+                msg='Incorrect model integral (I1)')
+        # Test I_2
+        expected_value = np.empty_like(I_2)
+        for (ev,pg) in zip(expected_value, self.prev_grid_sorted):
+            ev[:] = self.quantized_integral('model_squared', pg, self.grid_sorted)
+        self.assert_almost_equal(I_2, expected_value, rtol=1e-4,
+                msg='Incorrect model squared integral (I2)')
 
     def test_trans_reverts(self):
         x = np.array([-0.213,0.432,0.135,0.542])
@@ -446,19 +508,31 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
         func = partial(self.quant._optim_inv_transform, self.prev_grid_sorted)
         self.assert_jacobian_at(jac, func, x, rtol=1e-6, atol=1e-8)
 
-    def test_one_step_gradient_transformed(self):
+    def test_one_step_distortion_transformed(self):
+        at = self.quant._optim_transform(self.prev_grid_sorted,
+            self.grid_sorted)
         def marginal_distortion_transformed(x):
             grid = self.quant._optim_inv_transform(self.prev_grid_sorted, x)
             dist = np.empty((self.nquant, self.nquant))
             for (i,pg) in enumerate(self.prev_grid_sorted):
                  dist[i] = self.quantized_integral('distortion', pg, grid)
             return self.prev_proba.dot(dist).sum()
-        gradient = partial(self.quant._one_step_gradient_transformed,
-                self.prev_grid_sorted,
-                self.prev_proba)
+        # Test distortion
+        value, _ = self.quant._one_step_distortion_transformed(
+                    self.prev_grid_sorted,
+                    self.prev_proba,
+                    at)
+        expected_value = marginal_distortion_transformed(at)
+        self.assert_almost_equal(value, expected_value, rtol=1e-4,
+                msg='Incorrect distortion')
+        # Test gradient
+        def gradient(grid):
+                _, g = self.quant._one_step_distortion_transformed(
+                    self.prev_grid_sorted,
+                    self.prev_proba,
+                    grid)
+                return g
         func = marginal_distortion_transformed
-        at = self.quant._optim_transform(self.prev_grid_sorted,
-            self.grid_sorted)
         self.assert_gradient_at(gradient, func, at, rtol=1e-2)
 
     def test_init_grid_from_most_probable(self):
@@ -481,11 +555,13 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
         self.assert_true(diff_center<diff_last)
 
     def test_trans_proba_size(self):
-        trans = self.quant._transition_probability(self.prev_grid_sorted, self.grid_sorted)
+        trans = self.quant._transition_probability(
+                self.prev_grid_sorted, self.grid_sorted)
         self.assert_equal(trans.shape, (self.nquant, self.nquant))
 
     def test_trans_proba_sum_to_one_and_non_negative(self):
-        trans = self.quant._transition_probability(self.prev_grid_sorted, self.grid_sorted)
+        trans = self.quant._transition_probability(
+                self.prev_grid_sorted, self.grid_sorted)
         self.assert_equal(trans>=0, True)
         self.assert_almost_equal(np.sum(trans,axis=1),1)
 
@@ -511,6 +587,6 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
     #             self.prev_grid_sorted, self.prev_proba)
     #     self.assert_almost_equal(new_grid, np.sort(new_grid))
 
-#     def test_quantize(self):
-#         quant = pymaat.models.Quantizer(self.model)
-#         quant.quantize((0.18**2)/252)
+    def test_quantize(self):
+        quant = pymaat.models.Quantizer(self.model, nquant=10)
+        quant.quantize((0.18**2)/252)
