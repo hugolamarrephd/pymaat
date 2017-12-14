@@ -627,24 +627,27 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
         self.assert_hessian_at(hessian, func, self.grid.squeeze(),
                 rtol=1e-3, atol=1e-5)
 
-    # def test_trans_reverts(self):
-    #     x = np.array([-0.213,0.432,0.135,0.542])
-    #     grid = self.quant._optim_inv_transform(self.prev_grid, x)
-    #     x_ = self.quant._optim_transform(self.prev_grid, grid)
-    #     self.assert_almost_equal(x, x_)
+    def test_trans_reverts(self):
+        x = np.array([-0.213,0.432,0.135,0.542])
+        grid = self.quant._optim_inv_transform(
+                self.prev_grid.squeeze(), x)
+        x_ = self.quant._optim_transform(
+                self.prev_grid.squeeze(), grid)
+        self.assert_almost_equal(x, x_)
 
-    # def assert_inv_trans_is_in_space_for(self, x):
-    #     x = np.array(x)
-    #     grid = self.quant._optim_inv_transform(self.prev_grid, x)
-    #     h_ = self.quant._get_minimal_variance(self.prev_grid)
-    #     self.assert_equal(np.diff(grid)>0, True, msg='is not sorted')
-    #     self.assert_true(grid[1]>h_)
-    #     self.assert_true(0.5*(grid[0]+grid[1])>h_)
+    def assert_inv_trans_is_in_space_for(self, x):
+        x = np.array(x)
+        grid = self.quant._optim_inv_transform(
+                self.prev_grid.squeeze(), x)
+        h_ = self.quant._get_minimal_variance(self.prev_grid)
+        self.assert_equal(np.diff(grid)>0, True, msg='is not sorted')
+        self.assert_true(grid[1]>h_)
+        self.assert_true(0.5*(grid[0]+grid[1])>h_)
 
-    # def test_inv_trans_is_in_space(self):
-    #     self.assert_inv_trans_is_in_space_for([-0.213,0.432,0.135,0.542])
-    #     self.assert_inv_trans_is_in_space_for([-5.123,-3.243,5.234,2.313])
-    #     self.assert_inv_trans_is_in_space_for([3.234,-6.3123,-5.123,0.542])
+    def test_inv_trans_is_in_space(self):
+        self.assert_inv_trans_is_in_space_for([-0.213,0.432,0.135,0.542])
+        self.assert_inv_trans_is_in_space_for([-5.123,-3.243,5.234,2.313])
+        self.assert_inv_trans_is_in_space_for([3.234,-6.3123,-5.123,0.542])
 
     # def test_trans_jacobian(self):
     #     x = np.array([-0.213,0.432,0.135,0.542])

@@ -224,7 +224,7 @@ class Quantizer():
         if init is None:
             init = np.zeros((self.nquant))
         distortion = partial(
-                self._one_step_distortion,
+                self._transformed_distortion,
                 prev_grid,
                 prev_proba)
         opt = {'disp':True,
@@ -239,7 +239,7 @@ class Quantizer():
         opt_grid = self._optim_inv_transform(prev_grid, sol.x)
         return (sol.success, opt_grid)
 
-    def _one_step_distortion(self, prev_grid, prev_proba, x):
+    def _transformed_distortion(self, prev_grid, prev_proba, x):
         grid = self._optim_inv_transform(prev_grid, x)
         # Warm-up for broadcasting
         grid = grid[np.newaxis,:] #1-by-nquant
@@ -364,6 +364,7 @@ class Quantizer():
         x = np.empty_like(grid)
         x[0] = np.log(grid[0]-h_)
         x[1:] = np.log(grid[1:]-grid[0:-1])
+        x = x + np.log(self.nquant) - np.log(h_)
         assert np.all(np.isfinite(x))
         return x
 
@@ -376,18 +377,20 @@ class Quantizer():
         assert h_>0
         # Inverse transformation
         grid = np.cumsum(np.exp(x))
-        grid = grid + h_
+        grid = h_ * (1.+grid/self.nquant)
         assert np.all(np.isfinite(grid))
         assert np.all(np.diff(grid)>0)
         assert np.all(grid>0)
         return grid
 
     def _optim_jacobian(self, prev_grid, x):
+        assert prev_grid.ndim == 1
         all_exp = np.exp(x[np.newaxis,:])
         mask = np.tril(np.ones((self.nquant, self.nquant), float))
         return all_exp*mask
 
     def _get_minimal_variance(self, prev_grid):
+        assert prev_grid.ndim == 1
         return self.model.omega + self.model.beta*prev_grid[0]
 
     @staticmethod
