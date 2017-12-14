@@ -8,12 +8,15 @@ SPACE = np.power(np.finfo(float).eps, 1/3)
 Optimal delta(x) spacing for central difference method
 '''
 
-def derivative_at(func, x, *, mode='central'):
-    x = np.atleast_1d(x)
+def _get_dx(x):
     # dx = np.nanmin(np.maximum(np.abs(x),1.)*SPACE)
-    dx = np.nanmin(np.abs(x)*SPACE)
+    x = np.atleast_1d(x)
+    return np.nanmin(np.abs(x)*SPACE)
+
+def derivative_at(func, x, *, mode='central'):
+    dx = _get_dx(x)
     if mode=='central':
-        return scipy.misc.derivative(func, x, dx=dx, order=3)
+        return (func(x+dx) - func(x-dx))/(2.*dx)
     elif mode=='forward':
         return (func(x+dx) - func(x))/dx
     elif mode=='backward':
@@ -35,7 +38,7 @@ def jacobian_at(func, x, *, mode='central'):
     m = np.atleast_1d(func(x)).size
     x = np.atleast_1d(x)
     n = x.size
-    jac = np.empty((m,n),float)
+    jac = np.empty((m,n))
     for i in range(m):
         def func_nd_to_1d(x):
             f_ = func(x)
@@ -43,9 +46,9 @@ def jacobian_at(func, x, *, mode='central'):
         jac[i] = gradient_at(func_nd_to_1d, x, mode=mode)
     return jac
 
-def hessian_at(func, x, *, mode='central'):
+def hessian_at(func, x, mode='central'):
     n = np.atleast_1d(x).size
-    hess = np.empty((n,n), float)
+    hess = np.empty((n,n))
     for (i,x_) in enumerate(x):
         def grad_i(x_scalar):
             xcopy = x.copy()
@@ -53,4 +56,3 @@ def hessian_at(func, x, *, mode='central'):
             return gradient_at(func, xcopy, mode=mode)
         hess[i] = derivative_at(grad_i, x_, mode=mode)
     return hess
-

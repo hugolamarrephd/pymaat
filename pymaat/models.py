@@ -244,7 +244,7 @@ class Quantizer():
         # Warm-up for broadcasting
         grid = grid[np.newaxis,:] #1-by-nquant
         prev_grid = prev_grid[:,np.newaxis] #nquant-by-1
-        prev_proba = prev_proba[np.newaxis,:] #nquant-by-1
+        prev_proba = prev_proba[np.newaxis,:] #1-by-nquant
         # Compute Gradient
         distortion, gradient, hessian = self._do_one_step_distortion(
                 prev_grid, prev_proba, grid)
@@ -272,14 +272,14 @@ class Quantizer():
         assert vor[0,1]>=self._get_minimal_variance(prev_grid)
         roots = self._get_roots(prev_grid, vor)
         # Compute integrals
-        I0 = self.quant._get_integral(prev_grid, roots, order=0)
-        I1 = self.quant._get_integral(prev_grid, roots, order=1)
-        I2 = self.quant._get_integral(prev_grid, roots, order=2)
+        I0 = self._get_integral(prev_grid, roots, order=0)
+        I1 = self._get_integral(prev_grid, roots, order=1)
+        I2 = self._get_integral(prev_grid, roots, order=2)
         # Distortion
         distortion = np.sum(I2 - 2.*I1*grid + I0*grid**2., axis=1)
         distortion = prev_proba.dot(distortion)
         distortion = distortion.squeeze()
-        assert not np.any(np.isnan(distortion))
+        assert not np.isnan(distortion)
         # Gradient
         gradient = -2. * prev_proba.dot(I1-I0*grid)
         gradient = gradient.squeeze()
@@ -287,17 +287,14 @@ class Quantizer():
         # Hessian
         factor = self._get_factor_of_integral_derivative(
                 prev_grid, vor, roots)
-        d0[np.isnan(d0)] = 0
-        d1 = vor*d0
-        assert np.all(d1[vor==np.inf]==np.nan)
-        d1[np.isnan(d1)] = 0
-        return (d0, d1)
-        d0_over = np.diff(d0, n=1, axis=1)
-        d1_over = np.diff(d1, n=1, axis=1)
-        d0_left = d0[:,:-1]
-        d1_left = d1[:,:-1]
-        diagonal = -2. * prev_proba.dot(d1_over-d0_over*grid-I0)
-        off_diagonal = -2 * prev_proba.dot(-d1_left+d0_left*grid)
+        d0 = self._get_integral_derivative(factor, vor)
+        d1 = self._get_integral_derivative(factor, vor, order=1)
+        diagonal = -2. * prev_proba.dot(d1-d0*grid-I0)
+        diagonal = diagonal.squeeze()
+        d0 = self._get_integral_derivative(factor, vor, lag=-1)
+        d1 = self._get_integral_derivative(factor, vor, order=1, lag=-1)
+        off_diagonal = -2 * prev_proba.dot(d1-d0*grid)
+        off_diagonal = off_diagonal.squeeze()
         hessian = np.zeros((self.nquant, self.nquant))
         for j in range(self.nquant):
             #TODO VECTORIZE

@@ -321,14 +321,14 @@ class TestOneStepGarchFixture():
 
     # One-step variance integration
     __test_expectation_values = np.array(
-            [0.123,-0.542,-1.3421,1.452,-3.412,5.234])
+            [0.123,-0.542,-1.3421,1.452,5.234,-3.412,10])
     def test_one_step_expectation_until(self):
         def func_to_integrate(z):
             (h, _) = self.model.one_step_simulate(z, VAR_LEVEL)
             return h * norm.pdf(z)
         integral = partial(self.model.one_step_expectation_until, VAR_LEVEL)
         self.assert_integral_until(integral, func_to_integrate,
-                self.__test_expectation_values, rtol=1e-1)
+                self.__test_expectation_values, lower_bound=-100)
 
     def test_one_step_expectation_is_integral_until(self):
         integral = partial(self.model.one_step_expectation_until, VAR_LEVEL)
@@ -341,7 +341,7 @@ class TestOneStepGarchFixture():
         integral = partial(self.model.one_step_expectation_until, VAR_LEVEL,
                 order=2)
         self.assert_integral_until(integral, func_to_integrate,
-                self.__test_expectation_values, rtol=1e-4)
+                self.__test_expectation_values, lower_bound=-10)
 
     def test_one_step_expectation_squared_is_integral_until(self):
         integral = partial(self.model.one_step_expectation_until, VAR_LEVEL,
@@ -440,66 +440,58 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
             alpha=4.54e-6,
             beta=0.79,
             gamma=196.21)
-
     nper = 3
     nquant = 4
     quant = pymaat.models.Quantizer(model, nper=nper, nquant=nquant)
 
-    prev_grid_sorted = np.sort((0.18**2/252)
-            * np.array([0.50873928,0.55812529,1,1.73936377]))
-    prev_proba = np.array([0.05,0.25,0.5,0.20])
-    assert prev_proba.sum()==1.
-    most_proba = 2 # ID to most probable in previous grid
+    prev_grid = VAR_LEVEL * np.array(
+        [0.55812529,0.7532432,1.,1.4324])
+    prev_grid.sort()
+    grid = prev_grid.copy()
+    prev_proba = np.array([0.2,0.25,0.45,0.10])
+    assert prev_proba.sum() == 1.
 
-    grid_sorted, _ = np.sort(model.one_step_simulate(
-            np.array([0.1932423,-0.23491,0.93414,-0.5323434]),
-            1e-4))
+    prev_grid = prev_grid[:,np.newaxis]
+    grid = grid[np.newaxis,:]
+    prev_proba = prev_proba[np.newaxis,:]
 
-    def quantized_integral(self, type_, prev_grid, grid):
-        if prev_grid.size>1:
-            I = np.empty((prev_grid.size, grid.size))
-            for (i,pg) in enumerate(prev_grid):
-                 I[i] = self.quantized_integral(type_, pg, grid)
-            return I
-        else:
-            assert prev_grid.size==1
-            if type_ == 'distortion':
-                func = lambda z,h,g: np.power(h-g,2) * norm.pdf(z)
-            elif type_ == 'gradient':
-                func = lambda z,h,g: (h-g) * norm.pdf(z)
-            elif type_ == 'variance_squared':
-                func = lambda z,h,g: h**2. * norm.pdf(z)
-            elif type_ == 'variance':
-                func = lambda z,h,g: h * norm.pdf(z)
-            elif type_ == 'pdf':
-                func = lambda z,h,g: norm.pdf(z)
-            voronoi = self.quant._get_voronoi(grid[np.newaxis,:])
-            voronoi = voronoi[0]
-            def do_integration(bounds, pg, g):
-                assert g>bounds[0] and g<bounds[1]
-                def function_to_integrate(z):
-                    # 0 if between bounds else integral input
-                    (h, _) = self.model.one_step_simulate(z, pg)
-                    if h<bounds[0] or h>bounds[1]:
-                        return 0
-                    else:
-                        return func(z,h,g)
-                # Help integration by providing discontinuities
-                critical_pts = np.hstack([
-                    self.model.one_step_roots(pg, b) for b in bounds])
-                critical_pts = critical_pts[np.isfinite(critical_pts)]
-                # Can safely neglect when z outside [-30,30]
-                out = integrate.quad(function_to_integrate, -30, 30,
-                        points=critical_pts)
-                return out[0]
-            return np.array([do_integration((lb,ub), prev_grid, g)
-                for (lb,ub,g) in zip(voronoi[:-1], voronoi[1:], grid)])
+    voronoi = quant._get_voronoi(grid)
+    roots = quant._get_roots(prev_grid, voronoi)
+    factor = quant._get_factor_of_integral_derivative(
+            prev_grid, voronoi, roots)
 
-    def marginal_distortion(self, x):
-        grid = self.quant._optim_inv_transform(self.prev_grid_sorted, x)
-        dist = self.quantized_integral(
-                'distortion', self.prev_grid_sorted, grid)
-        return self.prev_proba.dot(dist).sum()/VAR_LEVEL**2.
+    def quantized_integral(self, func, grid):
+        OVER = 10
+        prev_grid = self.prev_grid.squeeze()
+        grid = grid.squeeze()
+        def do_integration(bounds, prev_h, h):
+            assert prev_h.size==1
+            assert h.size==1
+            assert h>bounds[0] and h<bounds[1]
+            def function_to_integrate(z):
+                # 0 if between bounds else func
+                H, _ = self.model.one_step_simulate(z, prev_h)
+                if H<bounds[0] or H>bounds[1]:
+                    return 0.
+                else:
+                    return func(z,H,h)
+            # Help integration by providing discontinuities
+            critical_pts = np.hstack([
+                self.model.one_step_roots(prev_h, b) for b in bounds])
+            critical_pts = critical_pts[np.isfinite(critical_pts)]
+            # Can safely neglect when z outside [-over,over]
+            out = integrate.quad(function_to_integrate, -OVER, OVER,
+                    points=critical_pts)
+            return out[0]
+        # Do computations
+        voronoi = self.quant._get_voronoi(grid[np.newaxis,:])
+        voronoi = voronoi.squeeze()
+        I = np.empty((self.nquant,self.nquant))
+        for (i,prev_h) in enumerate(prev_grid):
+            for (j,(lb,ub,h)) in enumerate(
+                    zip(voronoi[:-1], voronoi[1:], grid)):
+                I[i,j] = do_integration((lb,ub), prev_h, h)
+        return I
 
     def test_init(self):
         self.assert_equal(self.quant.nper, self.nper)
@@ -525,216 +517,207 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
                 [0,11.5,12.5,np.inf]]))
 
     def test_zeroth_order_integral(self):
-        roots = self.quant._get_voronoi_roots(
-                self.prev_grid_sorted[:,np.newaxis],
-                self.grid_sorted[np.newaxis,:])
-        I0 = self.quant._get_integral(
-                self.prev_grid_sorted[:,np.newaxis],
-                roots,
-                order=0)
+        roots = self.quant._get_voronoi_roots(self.prev_grid, self.grid)
+        value = self.quant._get_integral(self.prev_grid, roots, order=0)
         expected_value = self.quantized_integral(
-                'pdf', self.prev_grid_sorted, self.grid_sorted)
-        self.assert_almost_equal(I0, expected_value, rtol=1e-4,
+                lambda z,H,h: norm.pdf(z), self.grid)
+        self.assert_almost_equal(value, expected_value, rtol=1e-6,
                 msg='Incorrect pdf integral (I0)')
 
     def test_first_order_integral(self):
-        roots = self.quant._get_voronoi_roots(
-                self.prev_grid_sorted[:,np.newaxis],
-                self.grid_sorted[np.newaxis,:])
-        I1 = self.quant._get_integral(
-                self.prev_grid_sorted[:,np.newaxis],
-                roots,
-                order=1)
+        roots = self.quant._get_voronoi_roots(self.prev_grid, self.grid)
+        value = self.quant._get_integral(self.prev_grid, roots, order=1)
         expected_value = self.quantized_integral(
-                'variance', self.prev_grid_sorted, self.grid_sorted)
-        self.assert_almost_equal(I1, expected_value, rtol=1e-4,
+                lambda z,H,h: H * norm.pdf(z), self.grid)
+        self.assert_almost_equal(value, expected_value, rtol=1e-4,
                 msg='Incorrect model integral (I1)')
 
     def test_second_order_integral(self):
-        roots = self.quant._get_voronoi_roots(
-                self.prev_grid_sorted[:,np.newaxis],
-                self.grid_sorted[np.newaxis,:])
-        I2 = self.quant._get_integral(
-                self.prev_grid_sorted[:,np.newaxis],
-                roots,
-                order=2)
+        roots = self.quant._get_voronoi_roots(self.prev_grid, self.grid)
+        value = self.quant._get_integral(self.prev_grid, roots, order=2)
         expected_value = self.quantized_integral(
-                'variance_squared', self.prev_grid_sorted, self.grid_sorted)
-        self.assert_almost_equal(I2, expected_value, rtol=1e-4,
+                lambda z,H,h: H**2. * norm.pdf(z), self.grid)
+        self.assert_almost_equal(value, expected_value, rtol=1e-3,
                 msg='Incorrect model squared integral (I2)')
-    
-        # TODO CLEAN NEXT 4 BLOCKS
-    def assert_integral_derivative_minus_one_lag(self, factor, vor, order=0):
+
+    def assert_integral_derivative(self, order=0, lag=0):
         if order==0:
-            type_='pdf'
+            integrand = lambda z,H,h: norm.pdf(z)
         elif order==1:
-            type_='variance'
+            integrand = lambda z,H,h: H * norm.pdf(z)
         elif order==2:
-            type_='variance_squared'
-        for j in range(self.nquant-1):
-            def minus_one_lag_func(h):
-                new_grid = self.grid_sorted.copy()
-                new_grid[j] = h
-                I = self.quantized_integral(
-                        type_, self.prev_grid_sorted, new_grid)
-                return I[:,j+1]
-            def minus_one_lag_derivative(h):
+            integrand = lambda z,H,h: H**2. * norm.pdf(z)
+
+        for j in range(self.nquant-np.abs(lag)):
+
+            def func(h):
+                new_grid = self.grid.copy()
+                new_grid[0,j+(lag==1)] = h
+                I = self.quantized_integral(integrand, new_grid)
+                return I[:,j+(lag==-1)]
+
+            def derivative(_):
                 out = self.quant._get_integral_derivative(
-                        factor, vor, order=order, lag=-1)
-                return out[:,j+1]
-            self.assert_derivative_at(minus_one_lag_derivative,
-                    minus_one_lag_func, self.grid_sorted[j], rtol=1e-5)
+                        self.factor, self.voronoi, order=order, lag=lag)
+                return out[:,j+(lag==-1)]
 
-    def assert_integral_derivative_zero_lag(self, factor, vor, order=0):
-        if order==0:
-            type_='pdf'
-        elif order==1:
-            type_='variance'
-        elif order==2:
-            type_='variance_squared'
-        for j in range(self.nquant):
-            def zero_lag_func(h):
-                new_grid = self.grid_sorted.copy()
-                new_grid[j] = h
-                I = self.quantized_integral(
-                        type_, self.prev_grid_sorted, new_grid)
-                return I[:,j]
-            def zero_lag_derivative(h):
-                out = self.quant._get_integral_derivative(
-                        factor, vor, order=order, lag=0)
-                return out[:,j]
-            self.assert_derivative_at(zero_lag_derivative,
-                    zero_lag_func, self.grid_sorted[j], rtol=1e-5)
+            self.assert_derivative_at(derivative,
+                    func, self.grid[0,j+(lag==1)], rtol=1e-3)
 
-    def assert_integral_derivative_one_lag(self, factor, vor, order=0):
-        if order==0:
-            type_='pdf'
-        elif order==1:
-            type_='variance'
-        elif order==2:
-            type_='variance_squared'
-        for j in range(self.nquant-1):
-            def minus_one_lag_func(h):
-                new_grid = self.grid_sorted.copy()
-                new_grid[j+1] = h
-                I = self.quantized_integral(
-                        type_, self.prev_grid_sorted, new_grid)
-                return I[:,j]
-            def minus_one_lag_derivative(h):
-                out = self.quant._get_integral_derivative(
-                        factor, vor, order=order, lag=1)
-                return out[:,j]
-            self.assert_derivative_at(minus_one_lag_derivative,
-                    minus_one_lag_func, self.grid_sorted[j+1], rtol=1e-5)
+    def test_zeroth_order_integral_derivative_lag_m1(self):
+        self.assert_integral_derivative(order=0, lag=-1)
 
-    def test_integral_derivative(self):
-        vor = self.quant._get_voronoi(self.grid_sorted[np.newaxis,:])
-        roots = self.quant._get_roots(self.prev_grid_sorted[:,np.newaxis],
-                vor)
-        factor = self.quant._get_factor_of_integral_derivative(
-                self.prev_grid_sorted[:,np.newaxis], vor, roots)
-        self.assert_integral_derivative_minus_one_lag(factor, vor, order=0)
-        self.assert_integral_derivative_minus_one_lag(factor, vor, order=1)
-        self.assert_integral_derivative_minus_one_lag(factor, vor, order=2)
-        self.assert_integral_derivative_zero_lag(factor, vor, order=0)
-        self.assert_integral_derivative_zero_lag(factor, vor, order=1)
-        self.assert_integral_derivative_zero_lag(factor, vor, order=2)
-        self.assert_integral_derivative_one_lag(factor, vor, order=0)
-        self.assert_integral_derivative_one_lag(factor, vor, order=1)
-        self.assert_integral_derivative_one_lag(factor, vor, order=2)
+    def test_first_order_integral_derivative_lag_m1(self):
+        self.assert_integral_derivative(order=1, lag=-1)
 
-    def test_trans_reverts(self):
-        x = np.array([-0.213,0.432,0.135,0.542])
-        grid = self.quant._optim_inv_transform(self.prev_grid_sorted, x)
-        x_ = self.quant._optim_transform(self.prev_grid_sorted, grid)
-        self.assert_almost_equal(x, x_)
+    def test_second_order_integral_derivative_lag_m1(self):
+        self.assert_integral_derivative(order=2, lag=-1)
 
-    def assert_inv_trans_is_in_space_for(self, x):
-        x = np.array(x)
-        grid = self.quant._optim_inv_transform(self.prev_grid_sorted, x)
-        h_ = self.quant._get_minimal_variance(self.prev_grid_sorted)
-        self.assert_equal(np.diff(grid)>0, True, msg='is not sorted')
-        self.assert_true(grid[1]>h_)
-        self.assert_true(0.5*(grid[0]+grid[1])>h_)
+    def test_zeroth_order_integral_derivative_lag_0(self):
+        self.assert_integral_derivative(order=0, lag=0)
 
-    def test_inv_trans_is_in_space(self):
-        self.assert_inv_trans_is_in_space_for([-0.213,0.432,0.135,0.542])
-        self.assert_inv_trans_is_in_space_for([-5.123,-3.243,5.234,2.313])
-        self.assert_inv_trans_is_in_space_for([3.234,-6.3123,-5.123,0.542])
+    def test_first_order_integral_derivative_lag_0(self):
+        self.assert_integral_derivative(order=1, lag=0)
 
-    def test_trans_jacobian(self):
-        x = np.array([-0.213,0.432,0.135,0.542])
-        jac = partial(self.quant._optim_jacobian,
-                self.prev_grid_sorted)
-        func = partial(self.quant._optim_inv_transform,
-                self.prev_grid_sorted)
-        self.assert_jacobian_at(jac, func, x, rtol=1e-6, atol=1e-8)
+    def test_second_order_integral_derivative_lag_0(self):
+        self.assert_integral_derivative(order=2, lag=0)
+
+    def test_zeroth_order_integral_derivative_lag_1(self):
+        self.assert_integral_derivative(order=0, lag=1)
+
+    def test_first_order_integral_derivative_lag_1(self):
+        self.assert_integral_derivative(order=1, lag=1)
+
+    def test_second_order_integral_derivative_lag_1(self):
+        self.assert_integral_derivative(order=2, lag=1)
+
+    def marginal_distortion(self, grid):
+        dist = self.quantized_integral(
+                lambda z,H,h: (H-h)**2. * norm.pdf(z), grid)
+        return self.prev_proba.dot(dist).sum()
 
     def test_one_step_distortion(self):
-        at = self.quant._optim_transform(self.prev_grid_sorted,
-            self.grid_sorted)
-        # Test distortion
-        value, _, _ = self.quant._one_step_distortion(
-                    self.prev_grid_sorted,
-                    self.prev_proba,
-                    at)
-        expected_value = self.marginal_distortion(at)
-        self.assert_almost_equal(value, expected_value, rtol=1e-2,
-                msg='Incorrect distortion')
+        value, _, _ = self.quant._do_one_step_distortion(
+                        self.prev_grid,
+                        self.prev_proba,
+                        self.grid)
+        expected_value = self.marginal_distortion(self.grid)
+        self.assert_almost_equal(value, expected_value,
+                msg='Incorrect distortion', rtol=1e-5)
 
     def test_one_step_distortion_gradient(self):
-        at = self.quant._optim_transform(self.prev_grid_sorted,
-            self.grid_sorted)
         def gradient(grid):
-                _, g, _ = self.quant._one_step_distortion(
-                    self.prev_grid_sorted,
-                    self.prev_proba,
-                    grid)
-                return g
+                _, grad, _ = self.quant._do_one_step_distortion(
+                        self.prev_grid,
+                        self.prev_proba,
+                        grid[np.newaxis,:])
+                return grad
         func = self.marginal_distortion
-        self.assert_gradient_at(gradient, func, at, rtol=1e-2)
+        self.assert_gradient_at(gradient, func, self.grid.squeeze(),
+                rtol=1e-5)
 
     def test_one_step_distortion_hessian(self):
-        at = self.quant._optim_transform(self.prev_grid_sorted,
-            self.grid_sorted)
         def hessian(grid):
-                _, _, h = self.quant._one_step_distortion(
-                    self.prev_grid_sorted,
+            _, _, hess = self.quant._do_one_step_distortion(
+                    self.prev_grid,
                     self.prev_proba,
-                    grid)
-                return h
+                    grid[np.newaxis,:])
+            return hess
         func = self.marginal_distortion
-        self.assert_hessian_at(hessian, func, at, rtol=1e-6)
+        self.assert_hessian_at(hessian, func, self.grid.squeeze(),
+                rtol=1e-3, atol=1e-5)
 
-    def test_trans_proba_size(self):
-        trans = self.quant._transition_probability(
-                self.prev_grid_sorted, self.grid_sorted)
-        self.assert_equal(trans.shape, (self.nquant, self.nquant))
+    # def test_trans_reverts(self):
+    #     x = np.array([-0.213,0.432,0.135,0.542])
+    #     grid = self.quant._optim_inv_transform(self.prev_grid, x)
+    #     x_ = self.quant._optim_transform(self.prev_grid, grid)
+    #     self.assert_almost_equal(x, x_)
 
-    def test_trans_proba_sum_to_one_and_non_negative(self):
-        trans = self.quant._transition_probability(
-                self.prev_grid_sorted, self.grid_sorted)
-        self.assert_equal(trans>=0, True)
-        self.assert_almost_equal(np.sum(trans,axis=1),1)
+    # def assert_inv_trans_is_in_space_for(self, x):
+    #     x = np.array(x)
+    #     grid = self.quant._optim_inv_transform(self.prev_grid, x)
+    #     h_ = self.quant._get_minimal_variance(self.prev_grid)
+    #     self.assert_equal(np.diff(grid)>0, True, msg='is not sorted')
+    #     self.assert_true(grid[1]>h_)
+    #     self.assert_true(0.5*(grid[0]+grid[1])>h_)
 
-    def test_trans_proba(self):
-        value = self.quant._transition_probability(
-                self.prev_grid_sorted,
-                self.grid_sorted)
-        expected_value = self.quantized_integral(
-                'pdf', self.prev_grid_sorted, self.grid_sorted)
-        self.assert_almost_equal(value, expected_value)
+    # def test_inv_trans_is_in_space(self):
+    #     self.assert_inv_trans_is_in_space_for([-0.213,0.432,0.135,0.542])
+    #     self.assert_inv_trans_is_in_space_for([-5.123,-3.243,5.234,2.313])
+    #     self.assert_inv_trans_is_in_space_for([3.234,-6.3123,-5.123,0.542])
 
-    def test_transition_probability_from_first_grid(self):
-        first_variance = 1e-4
-        grid, *_ = self.quant._initialize(first_variance)
-        trans = self.quant._transition_probability(grid[0],self.grid_sorted)
-        first_row = trans[0]
-        self.assert_equal(trans==first_row, True)
+    # def test_trans_jacobian(self):
+    #     x = np.array([-0.213,0.432,0.135,0.542])
+    #     jac = partial(self.quant._optim_jacobian,
+    #             self.prev_grid)
+    #     func = partial(self.quant._optim_inv_transform,
+    #             self.prev_grid)
+    #     self.assert_jacobian_at(jac, func, x, rtol=1e-6, atol=1e-8)
+    # def test_one_step_distortion_transformed(self):
+    #     at = self.quant._optim_transform(self.prev_grid,
+    #         self.grid)
+    #     # Test distortion
+    #     value, _, _ = self.quant._one_step_distortion(
+    #                 self.prev_grid,
+    #                 self.prev_proba,
+    #                 at)
+    #     expected_value = self.marginal_distortion(at)
+    #     self.assert_almost_equal(value, expected_value, rtol=1e-2,
+    #             msg='Incorrect distortion')
+
+    # def test_one_step_distortion_transformed_gradient(self):
+    #     at = self.quant._optim_transform(self.prev_grid,
+    #         self.grid)
+    #     def gradient(grid):
+    #             _, g, _ = self.quant._one_step_distortion(
+    #                 self.prev_grid,
+    #                 self.prev_proba,
+    #                 grid)
+    #             return g
+    #     func = self.marginal_distortion
+    #     self.assert_gradient_at(gradient, func, at, rtol=1e-2)
+
+    # def test_one_step_distortion_transformed_hessian(self):
+    #     at = self.quant._optim_transform(self.prev_grid,
+    #         self.grid)
+    #     def hessian(grid):
+    #             _, _, h = self.quant._one_step_distortion(
+    #                 self.prev_grid,
+    #                 self.prev_proba,
+    #                 grid)
+    #             return h
+    #     func = self.marginal_distortion
+    #     self.assert_hessian_at(hessian, func, at, rtol=1e-6)
+
+    # def test_trans_proba_size(self):
+    #     trans = self.quant._transition_probability(
+    #             self.prev_grid, self.grid)
+    #     self.assert_equal(trans.shape, (self.nquant, self.nquant))
+
+    # def test_trans_proba_sum_to_one_and_non_negative(self):
+    #     trans = self.quant._transition_probability(
+    #             self.prev_grid, self.grid)
+    #     self.assert_equal(trans>=0, True)
+    #     self.assert_almost_equal(np.sum(trans,axis=1),1)
+
+    # def test_trans_proba(self):
+    #     value = self.quant._transition_probability(
+    #             self.prev_grid,
+    #             self.grid)
+    #     expected_value = self.quantized_integral(
+    #             'pdf', self.prev_grid, self.grid)
+    #     self.assert_almost_equal(value, expected_value)
+
+    # def test_transition_probability_from_first_grid(self):
+    #     first_variance = 1e-4
+    #     grid, *_ = self.quant._initialize(first_variance)
+    #     trans = self.quant._transition_probability(grid[0],self.grid)
+    #     first_row = trans[0]
+    #     self.assert_equal(trans==first_row, True)
 
     # def test_one_step_quantize_sorted(self):
     #     (_, new_grid) = self.quant._one_step_quantize(
-    #             self.prev_grid_sorted, self.prev_proba)
+    #             self.prev_grid, self.prev_proba)
     #     self.assert_almost_equal(new_grid, np.sort(new_grid))
 #     def test_quantize(self):
 #         quant = pymaat.models.Quantizer(self.model, nquant=10)
