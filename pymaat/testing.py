@@ -26,23 +26,33 @@ class TestCase(unittest.TestCase):
         np.testing.assert_allclose(a, b, rtol=rtol, atol=atol, err_msg=msg)
 
     # Derivative test utilities
-    def assert_derivative_at(self, derivative, func, at, rtol=1e-6, atol=0):
+    def assert_derivative_at(self, derivative, func, at, *,
+            rtol=1e-6, atol=0, mode='central'):
         value = derivative(at)
-        expected_value = pymaat.findiff.derivative_at(func, at)
+        expected_value = pymaat.findiff.derivative_at(func, at, mode=mode)
         self.assert_almost_equal(value, expected_value, rtol=rtol, atol=atol,
                 msg='Incorrect derivative')
 
-    def assert_gradient_at(self, gradient, func, at, rtol=1e-6, atol=0):
+    def assert_gradient_at(self, gradient, func, at, *,
+            rtol=1e-6, atol=0, mode='central'):
         value = gradient(at)
-        expected_value = pymaat.findiff.gradient_at(func, at)
+        expected_value = pymaat.findiff.gradient_at(func, at, mode=mode)
         self.assert_almost_equal(value, expected_value, rtol=rtol, atol=atol,
                 msg=f'Incorrect gradient at {at}')
 
-    def assert_jacobian_at(self, jacobian, func, at, rtol=1e-6, atol=0):
+    def assert_jacobian_at(self, jacobian, func, at, *,
+            rtol=1e-6, atol=0, mode='central'):
         value = jacobian(at)
-        expected_value = pymaat.findiff.jacobian_at(func, at)
+        expected_value = pymaat.findiff.jacobian_at(func, at, mode=mode)
         self.assert_almost_equal(value, expected_value, rtol=rtol, atol=atol,
                 msg=f'Incorrect jacobian at {at}')
+
+    def assert_hessian_at(self, hessian, func, at, *,
+            rtol=1e-6, atol=0, mode='central'):
+        value = hessian(at)
+        expected_value = pymaat.findiff.hessian_at(func, at, mode=mode)
+        self.assert_almost_equal(value, expected_value, rtol=rtol, atol=atol,
+                msg=f'Incorrect hessian at {at}')
 
     # Integral test utilities
     def assert_integral_until(self, integral, func, until,

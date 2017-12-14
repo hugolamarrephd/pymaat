@@ -20,6 +20,14 @@ class TestNumericalDerivatives(pymaat.testing.TestCase):
     def multi_to_scalar_grad(self, x):
         return np.array([2.*x[0], 3.*x[1]**2., 4.*x[2]**3., 5.*x[3]**4.])
 
+    def multi_to_scalar_hess(self, x):
+        return np.array([
+            [2., 0, 0, 0],
+            [0, 6.*x[1], 0, 0],
+            [0, 0, 12.*x[2]**2., 0],
+            [0, 0, 0, 20.*x[3]**3.]
+            ])
+
     def multi_to_multi_func(self, x):
         return np.array([x[0]**2. + x[1]**3. + x[2]**4. + x[3]**5.,
             6.*x[2] + x[3]**3.,
@@ -51,3 +59,9 @@ class TestNumericalDerivatives(pymaat.testing.TestCase):
                 self.multi_to_multi_func, self.test_multi_arg)
         expected_jac = self.multi_to_multi_jac(self.test_multi_arg)
         np.testing.assert_allclose(jac, expected_jac, rtol=1e-6, atol=1e-6)
+
+    def test_hessian(self):
+        hess = pymaat.findiff.hessian_at(
+                self.multi_to_scalar_func, self.test_multi_arg)
+        expected_hess = self.multi_to_scalar_hess(self.test_multi_arg)
+        np.testing.assert_allclose(hess, expected_hess, rtol=1e-2, atol=1e-2)

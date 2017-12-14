@@ -8,9 +8,8 @@ from scipy.stats import norm
 import pymaat.testing
 import pymaat.models
 
-# Test on daily scale
-VAR_LEVEL = 0.18**2./252.
-VOL_LEVEL = np.sqrt(VAR_LEVEL)
+VAR_LEVEL = pymaat.models.VAR_LEVEL
+VOL_LEVEL = np.sqrt(pymaat.models.VAR_LEVEL)
 RET_EXP = 0.06/252.
 
 class TestTimeseriesGarchFixture():
@@ -149,6 +148,7 @@ class TestOneStepGarchFixture():
                self.model.one_step_simulate,
                self.model.one_step_has_roots,
                self.model.one_step_roots,
+               self.model.one_step_roots_unsigned_derivative,
                self.model.one_step_expectation_until]
 
     def test_all_funcs_support_scalar(self):
@@ -216,37 +216,44 @@ class TestOneStepGarchFixture():
         next_variances, _ = self.one_step_simulate()
         self.assert_equal(next_variances>0, True)
 
-
     # One-step innovation roots
-
-    def test_one_step_roots_when_valid(self):
-        variances_at_singularity = self.get_lowest_one_step_variance()
-        next_variances = variances_at_singularity + 1e-5
-        left_roots, right_roots = self.model.one_step_roots(
-                self.__variances,
-                next_variances)
-        for (z,s) in zip((left_roots, right_roots), ('left', 'right')):
-            next_variances_solved, _ = self.model.one_step_simulate(
-                z, self.__variances)
-            self.assert_almost_equal(next_variances_solved, next_variances,
-                    msg='Invalid ' + s + ' roots.')
 
     def get_lowest_one_step_variance(self):
         return self.model._get_lowest_one_step_variance(self.__variances)
 
-    def test_one_step_roots_left_right_order(self):
-        variances_at_singularity = self.get_lowest_one_step_variance()
-        next_variances = variances_at_singularity + 1e-5
+    def get_valid_one_step(self):
+        next_variances = self.__variances
+        variances = np.min(next_variances)*0.9
+        return (variances, next_variances)
+
+    def get_invalid_one_step(self):
+        variances = self.__variances
+        next_variances = 0.9*self.model._get_lowest_one_step_variance(
+                self.__variances)
+        return (variances, next_variances)
+
+    def test_one_step_roots_when_valid(self):
+        (variances, next_variances) = self.get_valid_one_step()
         left_roots, right_roots = self.model.one_step_roots(
-                self.__variances,
+                variances,
+                next_variances)
+        for (z,s) in zip((left_roots, right_roots), ('left', 'right')):
+            next_variances_solved, _ = self.model.one_step_simulate(
+                z, variances)
+            self.assert_almost_equal(next_variances_solved, next_variances,
+                    msg='Invalid ' + s + ' roots.')
+
+    def test_one_step_roots_left_right_order(self):
+        (variances, next_variances) = self.get_valid_one_step()
+        left_roots, right_roots = self.model.one_step_roots(
+                variances,
                 next_variances)
         self.assert_equal(left_roots<right_roots, True)
 
-    def test_roots_nan_when_below_lowest(self):
-        variances_at_singularity = self.get_lowest_one_step_variance()
-        impossible_variances = variances_at_singularity - 1e-5
+    def test_roots_nan_when_invalid(self):
+        (variances, next_variances) = self.get_invalid_one_step()
         left_roots, right_roots = self.model.one_step_roots(
-                self.__variances, impossible_variances)
+                self.__variances, next_variances)
         self.assert_equal(left_roots, np.nan)
         self.assert_equal(right_roots, np.nan)
 
@@ -267,6 +274,50 @@ class TestOneStepGarchFixture():
                 self.__variances, 0)
         self.assert_equal(left_root, np.nan)
         self.assert_equal(right_root, np.nan)
+
+    def test_roots_derivatives_when_valid(self):
+        (variances, at) = self.get_valid_one_step()
+        def roots_func(next_variances):
+            _, z = self.model.one_step_roots(
+                    variances,
+                    next_variances)
+            return z
+        def roots_der(next_variances):
+            dz = self.model.one_step_roots_unsigned_derivative(
+                    variances,
+                    next_variances)
+            return dz
+        self.assert_derivative_at(roots_der, roots_func, at,
+                mode='forward', rtol=1e-4)
+
+    def test_roots_derivative_is_positive(self):
+        (variances, next_variances) = self.get_valid_one_step()
+        der = self.model.one_step_roots_unsigned_derivative(
+                variances,
+                next_variances)
+        self.assert_true(der>0, True)
+
+    def test_roots_derivatives_nan_when_invalid(self):
+        (variances, next_variances) = self.get_invalid_one_step()
+        der = self.model.one_step_roots_unsigned_derivative(
+                variances, next_variances)
+        self.assert_equal(der, np.nan)
+
+    def test_roots_derivatives_is_nan_at_singularity(self):
+        variances_at_singularity = self.get_lowest_one_step_variance()
+        der = self.model.one_step_roots_unsigned_derivative(
+                self.__variances, variances_at_singularity)
+        self.assert_equal(der, np.nan)
+
+    def test_roots_derivatives_at_inf_are_null(self):
+        der = self.model.one_step_roots_unsigned_derivative(
+                self.__variances, np.inf)
+        self.assert_equal(der, 0.)
+
+    def test_roots_derivatives_at_zero_are_nan(self):
+        der = self.model.one_step_roots_unsigned_derivative(
+                self.__variances, 0)
+        self.assert_equal(der, np.nan)
 
     # One-step variance integration
     __test_expectation_values = np.array(
@@ -404,6 +455,52 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
             np.array([0.1932423,-0.23491,0.93414,-0.5323434]),
             1e-4))
 
+    def quantized_integral(self, type_, prev_grid, grid):
+        if prev_grid.size>1:
+            I = np.empty((prev_grid.size, grid.size))
+            for (i,pg) in enumerate(prev_grid):
+                 I[i] = self.quantized_integral(type_, pg, grid)
+            return I
+        else:
+            assert prev_grid.size==1
+            if type_ == 'distortion':
+                func = lambda z,h,g: np.power(h-g,2) * norm.pdf(z)
+            elif type_ == 'gradient':
+                func = lambda z,h,g: (h-g) * norm.pdf(z)
+            elif type_ == 'variance_squared':
+                func = lambda z,h,g: h**2. * norm.pdf(z)
+            elif type_ == 'variance':
+                func = lambda z,h,g: h * norm.pdf(z)
+            elif type_ == 'pdf':
+                func = lambda z,h,g: norm.pdf(z)
+            voronoi = self.quant._get_voronoi(grid[np.newaxis,:])
+            voronoi = voronoi[0]
+            def do_integration(bounds, pg, g):
+                assert g>bounds[0] and g<bounds[1]
+                def function_to_integrate(z):
+                    # 0 if between bounds else integral input
+                    (h, _) = self.model.one_step_simulate(z, pg)
+                    if h<bounds[0] or h>bounds[1]:
+                        return 0
+                    else:
+                        return func(z,h,g)
+                # Help integration by providing discontinuities
+                critical_pts = np.hstack([
+                    self.model.one_step_roots(pg, b) for b in bounds])
+                critical_pts = critical_pts[np.isfinite(critical_pts)]
+                # Can safely neglect when z outside [-30,30]
+                out = integrate.quad(function_to_integrate, -30, 30,
+                        points=critical_pts)
+                return out[0]
+            return np.array([do_integration((lb,ub), prev_grid, g)
+                for (lb,ub,g) in zip(voronoi[:-1], voronoi[1:], grid)])
+
+    def marginal_distortion(self, x):
+        grid = self.quant._optim_inv_transform(self.prev_grid_sorted, x)
+        dist = self.quantized_integral(
+                'distortion', self.prev_grid_sorted, grid)
+        return self.prev_proba.dot(dist).sum()/VAR_LEVEL**2.
+
     def test_init(self):
         self.assert_equal(self.quant.nper, self.nper)
         self.assert_equal(self.quant.nquant, self.nquant)
@@ -414,7 +511,8 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
         # Shapes
         self.assert_equal(grid.shape, (self.nper+1, self.nquant))
         self.assert_equal(proba.shape, (self.nper+1, self.nquant))
-        self.assert_equal(trans.shape, (self.nper, self.nquant, self.nquant))
+        self.assert_equal(trans.shape,
+                (self.nper, self.nquant, self.nquant))
         # First grid
         self.assert_equal(grid[0,1:]==first_variance, True)
 
@@ -426,62 +524,124 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
                 [[0,1.5,2.5,np.inf],
                 [0,11.5,12.5,np.inf]]))
 
-    def quantized_integral(self, type_, prev_grid, grid):
-        if type_ == 'distortion':
-            func = lambda z,h,g: np.power(h-g,2) * norm.pdf(z)
-        elif type_ == 'gradient':
-            func = lambda z,h,g: (h-g) * norm.pdf(z)
-        elif type_ == 'model_squared':
-            func = lambda z,h,g: h**2. * norm.pdf(z)
-        elif type_ == 'model':
-            func = lambda z,h,g: h * norm.pdf(z)
-        elif type_ == 'pdf':
-            func = lambda z,h,g: norm.pdf(z)
-        assert prev_grid.size==1
-        voronoi = self.quant._get_voronoi(grid[np.newaxis,:])
-        voronoi = voronoi[0]
-        def do_integration(bounds, pg, g):
-            assert g>bounds[0] and g<bounds[1]
-            def function_to_integrate(z):
-                # 0 if between bounds else integral input
-                (h, _) = self.model.one_step_simulate(z, pg)
-                if h<bounds[0] or h>bounds[1]:
-                    return 0
-                else:
-                    return func(z,h,g)
-            # Help integration by providing discontinuities
-            critical_pts = np.hstack([
-                self.model.one_step_roots(pg, b) for b in bounds])
-            critical_pts = critical_pts[np.isfinite(critical_pts)]
-            # Can safely neglect when z outside [-30,30]
-            out = integrate.quad(function_to_integrate, -30, 30,
-                    points=critical_pts)
-            return out[0]
-        return np.array([do_integration((lb,ub), prev_grid, g)
-            for (lb,ub,g) in zip(voronoi[:-1], voronoi[1:], grid)])
-
-    def test_one_step_integrate(self):
-        I_0, I_1, I_2 = self.quant._one_step_integrate(
+    def test_zeroth_order_integral(self):
+        roots = self.quant._get_voronoi_roots(
                 self.prev_grid_sorted[:,np.newaxis],
                 self.grid_sorted[np.newaxis,:])
-        # Test I_0
-        expected_value = np.empty_like(I_0)
-        for (ev,pg) in zip(expected_value, self.prev_grid_sorted):
-            ev[:] = self.quantized_integral('pdf', pg, self.grid_sorted)
-        self.assert_almost_equal(I_0, expected_value, rtol=1e-4,
+        I0 = self.quant._get_integral(
+                self.prev_grid_sorted[:,np.newaxis],
+                roots,
+                order=0)
+        expected_value = self.quantized_integral(
+                'pdf', self.prev_grid_sorted, self.grid_sorted)
+        self.assert_almost_equal(I0, expected_value, rtol=1e-4,
                 msg='Incorrect pdf integral (I0)')
-        # Test I_1
-        expected_value = np.empty_like(I_1)
-        for (ev,pg) in zip(expected_value, self.prev_grid_sorted):
-            ev[:] = self.quantized_integral('model', pg, self.grid_sorted)
-        self.assert_almost_equal(I_1, expected_value, rtol=1e-4,
+
+    def test_first_order_integral(self):
+        roots = self.quant._get_voronoi_roots(
+                self.prev_grid_sorted[:,np.newaxis],
+                self.grid_sorted[np.newaxis,:])
+        I1 = self.quant._get_integral(
+                self.prev_grid_sorted[:,np.newaxis],
+                roots,
+                order=1)
+        expected_value = self.quantized_integral(
+                'variance', self.prev_grid_sorted, self.grid_sorted)
+        self.assert_almost_equal(I1, expected_value, rtol=1e-4,
                 msg='Incorrect model integral (I1)')
-        # Test I_2
-        expected_value = np.empty_like(I_2)
-        for (ev,pg) in zip(expected_value, self.prev_grid_sorted):
-            ev[:] = self.quantized_integral('model_squared', pg, self.grid_sorted)
-        self.assert_almost_equal(I_2, expected_value, rtol=1e-4,
+
+    def test_second_order_integral(self):
+        roots = self.quant._get_voronoi_roots(
+                self.prev_grid_sorted[:,np.newaxis],
+                self.grid_sorted[np.newaxis,:])
+        I2 = self.quant._get_integral(
+                self.prev_grid_sorted[:,np.newaxis],
+                roots,
+                order=2)
+        expected_value = self.quantized_integral(
+                'variance_squared', self.prev_grid_sorted, self.grid_sorted)
+        self.assert_almost_equal(I2, expected_value, rtol=1e-4,
                 msg='Incorrect model squared integral (I2)')
+    
+        # TODO CLEAN NEXT 4 BLOCKS
+    def assert_integral_derivative_minus_one_lag(self, factor, vor, order=0):
+        if order==0:
+            type_='pdf'
+        elif order==1:
+            type_='variance'
+        elif order==2:
+            type_='variance_squared'
+        for j in range(self.nquant-1):
+            def minus_one_lag_func(h):
+                new_grid = self.grid_sorted.copy()
+                new_grid[j] = h
+                I = self.quantized_integral(
+                        type_, self.prev_grid_sorted, new_grid)
+                return I[:,j+1]
+            def minus_one_lag_derivative(h):
+                out = self.quant._get_integral_derivative(
+                        factor, vor, order=order, lag=-1)
+                return out[:,j+1]
+            self.assert_derivative_at(minus_one_lag_derivative,
+                    minus_one_lag_func, self.grid_sorted[j], rtol=1e-5)
+
+    def assert_integral_derivative_zero_lag(self, factor, vor, order=0):
+        if order==0:
+            type_='pdf'
+        elif order==1:
+            type_='variance'
+        elif order==2:
+            type_='variance_squared'
+        for j in range(self.nquant):
+            def zero_lag_func(h):
+                new_grid = self.grid_sorted.copy()
+                new_grid[j] = h
+                I = self.quantized_integral(
+                        type_, self.prev_grid_sorted, new_grid)
+                return I[:,j]
+            def zero_lag_derivative(h):
+                out = self.quant._get_integral_derivative(
+                        factor, vor, order=order, lag=0)
+                return out[:,j]
+            self.assert_derivative_at(zero_lag_derivative,
+                    zero_lag_func, self.grid_sorted[j], rtol=1e-5)
+
+    def assert_integral_derivative_one_lag(self, factor, vor, order=0):
+        if order==0:
+            type_='pdf'
+        elif order==1:
+            type_='variance'
+        elif order==2:
+            type_='variance_squared'
+        for j in range(self.nquant-1):
+            def minus_one_lag_func(h):
+                new_grid = self.grid_sorted.copy()
+                new_grid[j+1] = h
+                I = self.quantized_integral(
+                        type_, self.prev_grid_sorted, new_grid)
+                return I[:,j]
+            def minus_one_lag_derivative(h):
+                out = self.quant._get_integral_derivative(
+                        factor, vor, order=order, lag=1)
+                return out[:,j]
+            self.assert_derivative_at(minus_one_lag_derivative,
+                    minus_one_lag_func, self.grid_sorted[j+1], rtol=1e-5)
+
+    def test_integral_derivative(self):
+        vor = self.quant._get_voronoi(self.grid_sorted[np.newaxis,:])
+        roots = self.quant._get_roots(self.prev_grid_sorted[:,np.newaxis],
+                vor)
+        factor = self.quant._get_factor_of_integral_derivative(
+                self.prev_grid_sorted[:,np.newaxis], vor, roots)
+        self.assert_integral_derivative_minus_one_lag(factor, vor, order=0)
+        self.assert_integral_derivative_minus_one_lag(factor, vor, order=1)
+        self.assert_integral_derivative_minus_one_lag(factor, vor, order=2)
+        self.assert_integral_derivative_zero_lag(factor, vor, order=0)
+        self.assert_integral_derivative_zero_lag(factor, vor, order=1)
+        self.assert_integral_derivative_zero_lag(factor, vor, order=2)
+        self.assert_integral_derivative_one_lag(factor, vor, order=0)
+        self.assert_integral_derivative_one_lag(factor, vor, order=1)
+        self.assert_integral_derivative_one_lag(factor, vor, order=2)
 
     def test_trans_reverts(self):
         x = np.array([-0.213,0.432,0.135,0.542])
@@ -504,55 +664,47 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
 
     def test_trans_jacobian(self):
         x = np.array([-0.213,0.432,0.135,0.542])
-        jac = partial(self.quant._optim_jacobian, self.prev_grid_sorted)
-        func = partial(self.quant._optim_inv_transform, self.prev_grid_sorted)
+        jac = partial(self.quant._optim_jacobian,
+                self.prev_grid_sorted)
+        func = partial(self.quant._optim_inv_transform,
+                self.prev_grid_sorted)
         self.assert_jacobian_at(jac, func, x, rtol=1e-6, atol=1e-8)
 
-    def test_one_step_distortion_transformed(self):
+    def test_one_step_distortion(self):
         at = self.quant._optim_transform(self.prev_grid_sorted,
             self.grid_sorted)
-        def marginal_distortion_transformed(x):
-            grid = self.quant._optim_inv_transform(self.prev_grid_sorted, x)
-            dist = np.empty((self.nquant, self.nquant))
-            for (i,pg) in enumerate(self.prev_grid_sorted):
-                 dist[i] = self.quantized_integral('distortion', pg, grid)
-            return self.prev_proba.dot(dist).sum()
         # Test distortion
-        value, _ = self.quant._one_step_distortion_transformed(
+        value, _, _ = self.quant._one_step_distortion(
                     self.prev_grid_sorted,
                     self.prev_proba,
                     at)
-        expected_value = marginal_distortion_transformed(at)
-        self.assert_almost_equal(value, expected_value, rtol=1e-4,
+        expected_value = self.marginal_distortion(at)
+        self.assert_almost_equal(value, expected_value, rtol=1e-2,
                 msg='Incorrect distortion')
-        # Test gradient
+
+    def test_one_step_distortion_gradient(self):
+        at = self.quant._optim_transform(self.prev_grid_sorted,
+            self.grid_sorted)
         def gradient(grid):
-                _, g = self.quant._one_step_distortion_transformed(
+                _, g, _ = self.quant._one_step_distortion(
                     self.prev_grid_sorted,
                     self.prev_proba,
                     grid)
                 return g
-        func = marginal_distortion_transformed
+        func = self.marginal_distortion
         self.assert_gradient_at(gradient, func, at, rtol=1e-2)
 
-    def test_init_grid_from_most_probable(self):
-        init_grid = self.quant._init_grid_from_most_probable(
-                self.prev_grid_sorted, self.prev_proba)
-        self.assert_true(init_grid.shape==(self.nquant,))
-        self.assert_equal(init_grid>0, True)
-        self.assert_equal(np.diff(init_grid)>0, True)
-        self.assert_true(init_grid[0]<self.prev_grid_sorted[self.most_proba])
-        self.assert_true(init_grid[-1]>self.prev_grid_sorted[self.most_proba])
-
-    def test_get_init_innov_is_sorted(self):
-        init = self.quant._get_init_innov(self.nquant)
-        self.assert_equal(np.diff(init)>0, True)
-        # More concentrated in center
-        diff_center = init[0,2]-init[0,1]
-        diff_first = init[0,1]-init[0,0]
-        diff_last = init[0,3]-init[0,2]
-        self.assert_true(diff_center<diff_first)
-        self.assert_true(diff_center<diff_last)
+    def test_one_step_distortion_hessian(self):
+        at = self.quant._optim_transform(self.prev_grid_sorted,
+            self.grid_sorted)
+        def hessian(grid):
+                _, _, h = self.quant._one_step_distortion(
+                    self.prev_grid_sorted,
+                    self.prev_proba,
+                    grid)
+                return h
+        func = self.marginal_distortion
+        self.assert_hessian_at(hessian, func, at, rtol=1e-6)
 
     def test_trans_proba_size(self):
         trans = self.quant._transition_probability(
@@ -569,10 +721,8 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
         value = self.quant._transition_probability(
                 self.prev_grid_sorted,
                 self.grid_sorted)
-        expected_value = np.empty_like(value)
-        for (i,pg) in enumerate(self.prev_grid_sorted):
-            expected_value[i] = self.quantized_integral(
-                    'pdf', pg, self.grid_sorted)
+        expected_value = self.quantized_integral(
+                'pdf', self.prev_grid_sorted, self.grid_sorted)
         self.assert_almost_equal(value, expected_value)
 
     def test_transition_probability_from_first_grid(self):
@@ -586,7 +736,6 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
     #     (_, new_grid) = self.quant._one_step_quantize(
     #             self.prev_grid_sorted, self.prev_proba)
     #     self.assert_almost_equal(new_grid, np.sort(new_grid))
-
-    def test_quantize(self):
-        quant = pymaat.models.Quantizer(self.model, nquant=10)
-        quant.quantize((0.18**2)/252)
+#     def test_quantize(self):
+#         quant = pymaat.models.Quantizer(self.model, nquant=10)
+#         quant.quantize((0.18**2)/252)

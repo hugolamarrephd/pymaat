@@ -4,8 +4,10 @@ import numpy as np
 import scipy.optimize
 from scipy.stats import norm
 
-def print_as_vol(variance):
-    print(np.sqrt(variance*252)*100)
+VAR_LEVEL = 0.18**2./252.
+
+def print_vol(daily_variance):
+    print(np.sqrt(daily_variance*252)*100)
 
 # TODO: move to utilities
 def instance_returns_numpy_or_scalar(output_type):
@@ -94,6 +96,14 @@ class Garch():
         innov_left = a-d
         innov_right = a+d
         return (innov_left, innov_right)
+
+    @instance_returns_numpy_or_scalar(output_type=(float,float))
+    def one_step_roots_unsigned_derivative(self, variances, next_variances):
+        denom = np.sqrt(self.alpha
+                * (next_variances-self.omega-self.beta*variances))
+        denom[denom < np.finfo(float).eps] = np.nan
+        der = 0.5/denom
+        return der
 
     @instance_returns_numpy_or_scalar(output_type=float)
     def one_step_expectation_until(self, variances, innovations,
@@ -184,7 +194,6 @@ class Quantizer():
         self.model = model
         self.nper = nper
         self.nquant = nquant
-        self._init_innov = self._get_init_innov(self.nquant)
 
     def quantize(self, first_variance):
         # Check input
@@ -198,7 +207,7 @@ class Quantizer():
                 raise RuntimeError
             trans[t-1] = self._transition_probability(grid[t-1], grid[t])
             proba[t] = proba[t-1][np.newaxis,:].dot(trans[t-1])
-            print_as_vol(grid[t])
+            print_vol(grid[t])
         # return quantization
 
     def _initialize(self, first_variance):
@@ -210,42 +219,41 @@ class Quantizer():
         trans = np.empty((self.nper, self.nquant, self.nquant), float)
         return (grid, proba, trans)
 
-    def _one_step_quantize(self, prev_grid, prev_proba):
+    def _one_step_quantize(self, prev_grid, prev_proba, *,
+            init=None):
+        if init is None:
+            init = np.zeros((self.nquant))
         distortion = partial(
-                self._one_step_distortion_transformed,
+                self._one_step_distortion,
                 prev_grid,
                 prev_proba)
-        init_grid = self._init_grid_from_most_probable(prev_grid, prev_proba)
-        init_x = self._optim_transform(prev_grid, init_grid)
-        # Optimization
-        opt = {'disp':True, 'norm':np.inf, 'maxiter':np.inf, 'gtol':1e-6}
-        sol = scipy.optimize.minimize(distortion, init_x,
-                method='BFGS',
+        opt = {'disp':True,
+               'maxiter':np.inf,
+               'gtol':1e-6}
+        sol = scipy.optimize.minimize(distortion, init,
+                method='trust-ncg',
                 jac=True,
+                hess=True,
                 options=opt)
         # Format output
         opt_grid = self._optim_inv_transform(prev_grid, sol.x)
         return (sol.success, opt_grid)
 
-    def _one_step_distortion_transformed(self,
-            prev_grid, prev_proba, x):
+    def _one_step_distortion(self, prev_grid, prev_proba, x):
         grid = self._optim_inv_transform(prev_grid, x)
-        # print_as_vol(grid)
         # Warm-up for broadcasting
-        grid = grid[np.newaxis,:]
-        prev_grid = prev_grid[:,np.newaxis]
-        prev_proba = prev_proba[np.newaxis,:]
+        grid = grid[np.newaxis,:] #1-by-nquant
+        prev_grid = prev_grid[:,np.newaxis] #nquant-by-1
+        prev_proba = prev_proba[np.newaxis,:] #nquant-by-1
         # Compute Gradient
-        distortion, gradient = self._one_step_distortion(
+        distortion, gradient, hessian = self._do_one_step_distortion(
                 prev_grid, prev_proba, grid)
         jacobian = self._optim_jacobian(prev_grid, x)
         gradient_wrt_x = gradient.dot(jacobian)
-        assert not np.any(np.isnan(gradient_wrt_x))
-        # gradient_wrt_x[gradient_wrt_x==0] = np.finfo(float).max
-        # print_as_vol(grid)
-        # print(distortion*1e10)
-        # print(gradient_wrt_x*1e10)
-        return (distortion*1e10, gradient_wrt_x*1e10)
+        hessian_wrt_x = (jacobian.T.dot(hessian).dot(jacobian) +
+            gradient.dot(np.diag(np.diag(jacobian))))
+        norm = VAR_LEVEL**2.
+        return (distortion/norm, gradient_wrt_x/norm, hessian_wrt_x/norm)
 
     def _transition_probability(self, prev_grid, grid):
         grid = grid[np.newaxis,:]
@@ -256,55 +264,93 @@ class Quantizer():
         cdf = lambda z: norm.cdf(z)
         return self._over_range(cdf, roots)
 
-    def _one_step_distortion(self, prev_grid, prev_proba, grid):
-        # Compute integrals
-        I_0, I_1, I_2 = self._one_step_integrate(prev_grid, grid)
-        # Distortion
-        distortion = np.sum(I_2 - 2.*I_1*grid + I_0*grid**2., axis=1)
-        distortion = prev_proba.dot(distortion)
-        distortion = distortion.squeeze()
-        # dDist/dGrid
-        gradient = -2 * prev_proba.dot(I_1-I_0*grid)
-        gradient = gradient.squeeze()
-        assert not np.any(np.isnan(distortion))
-        assert not np.any(np.isnan(gradient))
-        return (distortion, gradient)
-
-    def _init_grid_from_most_probable(self, prev_grid, prev_proba):
-        most_probable = np.argmax(prev_proba)
-        most_probable_variance = prev_grid[most_probable]
-        return self._init_grid_from(most_probable_variance)
-
-    def _init_grid_from(self, variance_scalar):
-        # Warm-up for broadcast
-        variance_scalar = np.atleast_2d(variance_scalar)
-        assert np.all(variance_scalar>0)
-        # Initialization of quantizer (incl. probabilities)
-        (grid,*_) = self.model.one_step_simulate(
-                self._init_innov, variance_scalar)
-        grid.sort(axis=1)
-        return grid.squeeze()
-
-    def _one_step_integrate(self, prev_grid, grid):
+    def _do_one_step_distortion(self, prev_grid, prev_proba, grid):
         assert prev_grid.shape == (self.nquant, 1)
         assert grid.shape == (1, self.nquant)
-        roots = self._get_voronoi_roots(prev_grid, grid)
-        model = (lambda z:
-                self.model.one_step_expectation_until(prev_grid, z, order=1))
-        model_squared = (lambda z:
-                self.model.one_step_expectation_until(prev_grid, z, order=2))
-        cdf = lambda z: norm.cdf(z)
-        return (self._over_range(cdf, roots),
-                self._over_range(model, roots),
-                self._over_range(model_squared, roots))
+        vor = self._get_voronoi(grid)
+        # First (non-zero) voronoi point must be above lower variance bound
+        assert vor[0,1]>=self._get_minimal_variance(prev_grid)
+        roots = self._get_roots(prev_grid, vor)
+        # Compute integrals
+        I0 = self.quant._get_integral(prev_grid, roots, order=0)
+        I1 = self.quant._get_integral(prev_grid, roots, order=1)
+        I2 = self.quant._get_integral(prev_grid, roots, order=2)
+        # Distortion
+        distortion = np.sum(I2 - 2.*I1*grid + I0*grid**2., axis=1)
+        distortion = prev_proba.dot(distortion)
+        distortion = distortion.squeeze()
+        assert not np.any(np.isnan(distortion))
+        # Gradient
+        gradient = -2. * prev_proba.dot(I1-I0*grid)
+        gradient = gradient.squeeze()
+        assert not np.any(np.isnan(gradient))
+        # Hessian
+        factor = self._get_factor_of_integral_derivative(
+                prev_grid, vor, roots)
+        d0[np.isnan(d0)] = 0
+        d1 = vor*d0
+        assert np.all(d1[vor==np.inf]==np.nan)
+        d1[np.isnan(d1)] = 0
+        return (d0, d1)
+        d0_over = np.diff(d0, n=1, axis=1)
+        d1_over = np.diff(d1, n=1, axis=1)
+        d0_left = d0[:,:-1]
+        d1_left = d1[:,:-1]
+        diagonal = -2. * prev_proba.dot(d1_over-d0_over*grid-I0)
+        off_diagonal = -2 * prev_proba.dot(-d1_left+d0_left*grid)
+        hessian = np.zeros((self.nquant, self.nquant))
+        for j in range(self.nquant):
+            #TODO VECTORIZE
+            hessian[j,j] = diagonal[j]
+            if j>0:
+                hessian[j-1,j] = off_diagonal[j]
+                hessian[j,j-1] = hessian[j-1,j] # make symmetric
+        assert not np.any(np.isnan(hessian))
+        return distortion, gradient, hessian
+
+    def _get_integral(self, prev_grid, roots, order=0):
+        if order==0:
+            integral_func = lambda z: norm.cdf(z)
+        else:
+            integral_func = lambda z: self.model.one_step_expectation_until(
+                prev_grid, z, order=order)
+        return self._over_range(integral_func, roots)
+
+    def _get_integral_derivative(self, factor, vor, order=0, lag=0):
+        if order==0:
+            d = factor
+        elif order==1:
+            d = factor * vor
+        else:
+            d = factor * vor**order
+        d[np.isnan(d)] = 0
+        if lag==-1:
+            d = -d[:,:-1]
+            d[:,0] = np.nan # first column is meaningless
+            return d
+        elif lag==0:
+            return np.diff(d, n=1, axis=1)
+        elif lag==1:
+            d = d[:,1:]
+            d[:,-1] = np.nan # last column is meaningless
+            return d
+
+    def _get_factor_of_integral_derivative(self, prev_grid, vor, roots):
+        root_derivative = self._get_roots_derivatives(prev_grid, vor)
+        factor = (0.5 * root_derivative
+                * (norm.pdf(roots[0])+norm.pdf(roots[1])))
+        factor[np.isnan(factor)] = 0
+        return factor
 
     def _get_voronoi_roots(self, prev_grid, grid):
-        v = self._get_voronoi(grid)
-        # First (non-zero) voronoi point must be above lower variance bound
-        assert v[0,1]>=self._get_minimal_variance(prev_grid)
-        roots = self.model.one_step_roots(prev_grid, v)
-        return roots
+        vor = self._get_voronoi(grid)
+        return self._get_roots(prev_grid, vor)
 
+    def _get_roots(self, prev_grid, vor):
+        return self.model.one_step_roots(prev_grid, vor)
+
+    def _get_roots_derivatives(self, prev_grid, vor):
+        return self.model.one_step_roots_unsigned_derivative(prev_grid, vor)
 
     # TODO: wrap 3 following methods in reparametrization object
     def _optim_transform(self, prev_grid, grid):
@@ -312,11 +358,15 @@ class Quantizer():
         assert prev_grid.ndim == 1
         assert grid.size == self.nquant
         assert prev_grid.size == self.nquant
+        assert np.all(np.isfinite(grid))
+        assert np.all(np.diff(grid)>0)
+        assert np.all(grid>0)
         h_ = self._get_minimal_variance(prev_grid)
+        assert h_>0
+        # Transformation
         x = np.empty_like(grid)
-        x[0] = np.arctanh((grid[0]-h_)/(grid[1]-h_))
-        x[1] = np.log(grid[1]-h_)
-        x[2:] = np.log(grid[2:]-grid[1:-1])
+        x[0] = np.log(grid[0]-h_)
+        x[1:] = np.log(grid[1:]-grid[0:-1])
         assert np.all(np.isfinite(x))
         return x
 
@@ -327,23 +377,18 @@ class Quantizer():
         assert prev_grid.size == self.nquant
         h_ = self._get_minimal_variance(prev_grid)
         assert h_>0
-        grid = np.empty_like(x)
-        grid[0] = np.tanh(x[0])*np.exp(x[1])
-        grid[1:] = np.cumsum(np.exp(x[1:]))
+        # Inverse transformation
+        grid = np.cumsum(np.exp(x))
         grid = grid + h_
         assert np.all(np.isfinite(grid))
-        assert np.all(np.diff(grid)>=0)
+        assert np.all(np.diff(grid)>0)
         assert np.all(grid>0)
         return grid
 
     def _optim_jacobian(self, prev_grid, x):
-        j = np.zeros((self.nquant, self.nquant), float)
-        j[0,0] = np.exp(x[1])*(1-np.tanh(x[0])**2.)
-        j[0,1] = np.exp(x[1])*np.tanh(x[0])
-        sub_j = np.exp(x[1:][np.newaxis,:])
-        sub_mask = np.tril(np.ones((self.nquant-1, self.nquant-1), float))
-        j[1:,1:] = sub_j*sub_mask
-        return j
+        all_exp = np.exp(x[np.newaxis,:])
+        mask = np.tril(np.ones((self.nquant, self.nquant), float))
+        return all_exp*mask
 
     def _get_minimal_variance(self, prev_grid):
         return self.model.omega + self.model.beta*prev_grid[0]
@@ -364,14 +409,3 @@ class Quantizer():
         out[np.isnan(out)] = 0
         out = np.diff(out, n=1, axis=1)
         return out
-
-    @staticmethod
-    def _get_init_innov(nquant):
-        '''
-        Returns 1-by-nquant 2D-array
-        '''
-        q = np.array(range(1, nquant+1), float) # (1, ..., nquant)
-        q = q/(nquant+1) # (1/(nquant+1), ..., nquant/(nquant+1))
-        init_innov = norm.ppf(q)
-        init_innov = init_innov[np.newaxis,:]
-        return init_innov
