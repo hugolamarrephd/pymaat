@@ -9,9 +9,11 @@ Optimal delta(x) spacing for central difference method
 '''
 
 def _get_dx(x):
-    # dx = np.nanmin(np.maximum(np.abs(x),1.)*SPACE)
     x = np.atleast_1d(x)
-    return np.nanmin(np.abs(x)*SPACE)
+    dx = np.nanmin(np.abs(x)*SPACE)
+    if dx == 0.:
+        raise ValueError("At least one x must be non-zero")
+    return dx
 
 def derivative_at(func, x, *, mode='central'):
     dx = _get_dx(x)

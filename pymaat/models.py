@@ -200,7 +200,9 @@ class Quantizer():
         first_variance = np.atleast_1d(first_variance)
         if first_variance.shape != (1,):
             raise ValueError
+        # Initialize results
         grid, proba, trans = self._initialize(first_variance)
+        # Perform marginal variance quantization
         for t in range(1,self.nper+1):
             success, grid[t] = self._one_step_quantize(grid[t-1], proba[t-1])
             if not success: # Early failure
@@ -208,6 +210,8 @@ class Quantizer():
             trans[t-1] = self._transition_probability(grid[t-1], grid[t])
             proba[t] = proba[t-1][np.newaxis,:].dot(trans[t-1])
             print_vol(grid[t])
+            print(proba[t]*100)
+            print(trans[t-1]*100)
         # return quantization
 
     def _initialize(self, first_variance):
@@ -219,41 +223,61 @@ class Quantizer():
         trans = np.empty((self.nper, self.nquant, self.nquant), float)
         return (grid, proba, trans)
 
-    def _one_step_quantize(self, prev_grid, prev_proba, *,
-            init=None):
+    def _one_step_quantize(self, prev_grid, prev_proba, *, init=None):
         if init is None:
-            init = np.zeros((self.nquant))
-        distortion = partial(
-                self._transformed_distortion,
+            init = np.zeros(self.nquant)
+        distortion = partial(self._transformed_distortion,
                 prev_grid,
                 prev_proba)
-        opt = {'disp':True,
-               'maxiter':np.inf,
-               'gtol':1e-6}
+        gradient = partial(self._transformed_distortion_gradient,
+                prev_grid,
+                prev_proba)
+        hessian = partial(self._transformed_distortion_hessian,
+                prev_grid,
+                prev_proba)
+        opt = {'disp':False, 'maxiter':np.inf, 'gtol':1e-8}
         sol = scipy.optimize.minimize(distortion, init,
                 method='trust-ncg',
-                jac=True,
-                hess=True,
+                jac=gradient,
+                hess=hessian,
                 options=opt)
         # Format output
-        opt_grid = self._optim_inv_transform(prev_grid, sol.x)
-        return (sol.success, opt_grid)
+        opt_grid = self._inverse_transform(prev_grid, sol.x)
+        return sol.success, opt_grid
 
     def _transformed_distortion(self, prev_grid, prev_proba, x):
-        grid = self._optim_inv_transform(prev_grid, x)
-        # Warm-up for broadcasting
+        grid = self._inverse_transform(prev_grid, x)
         grid = grid[np.newaxis,:] #1-by-nquant
         prev_grid = prev_grid[:,np.newaxis] #nquant-by-1
         prev_proba = prev_proba[np.newaxis,:] #1-by-nquant
-        # Compute Gradient
-        distortion, gradient, hessian = self._do_one_step_distortion(
+        distortion, _, _ = self._do_one_step_distortion(
                 prev_grid, prev_proba, grid)
-        jacobian = self._optim_jacobian(prev_grid, x)
-        gradient_wrt_x = gradient.dot(jacobian)
-        hessian_wrt_x = (jacobian.T.dot(hessian).dot(jacobian) +
-            gradient.dot(np.diag(np.diag(jacobian))))
-        norm = VAR_LEVEL**2.
-        return (distortion/norm, gradient_wrt_x/norm, hessian_wrt_x/norm)
+        return distortion/VAR_LEVEL**2.
+
+    def _transformed_distortion_gradient(self, prev_grid, prev_proba, x):
+        grid = self._inverse_transform(prev_grid, x)
+        grid = grid[np.newaxis,:] #1-by-nquant
+        prev_grid = prev_grid[:,np.newaxis] #nquant-by-1
+        prev_proba = prev_proba[np.newaxis,:] #1-by-nquant
+        _, gradient, _= self._do_one_step_distortion(
+                prev_grid, prev_proba, grid)
+        trans_jacobian = self._trans_jacobian(prev_grid.squeeze(), x)
+        gradient_wrt_x = gradient.dot(trans_jacobian).squeeze()
+        return gradient_wrt_x/VAR_LEVEL**2.
+
+    def _transformed_distortion_hessian(self, prev_grid, prev_proba, x):
+        grid = self._inverse_transform(prev_grid, x)
+        grid = grid[np.newaxis,:] #1-by-nquant
+        prev_grid = prev_grid[:,np.newaxis] #nquant-by-1
+        prev_proba = prev_proba[np.newaxis,:] #1-by-nquant
+        _, gradient, hessian = self._do_one_step_distortion(
+                prev_grid, prev_proba, grid)
+        trans_jacobian = self._trans_jacobian(prev_grid.squeeze(), x)
+        trans_hessian_corr = self._trans_hessian_correction(
+                prev_grid.squeeze(), gradient, x)
+        hessian_wrt_x = (trans_jacobian.T.dot(hessian).dot(trans_jacobian)
+                + trans_hessian_corr)
+        return  hessian_wrt_x/VAR_LEVEL**2.
 
     def _transition_probability(self, prev_grid, grid):
         grid = grid[np.newaxis,:]
@@ -269,7 +293,7 @@ class Quantizer():
         assert grid.shape == (1, self.nquant)
         vor = self._get_voronoi(grid)
         # First (non-zero) voronoi point must be above lower variance bound
-        assert vor[0,1]>=self._get_minimal_variance(prev_grid)
+        assert vor[0,1]>=self._get_minimal_variance(prev_grid.squeeze())
         roots = self._get_roots(prev_grid, vor)
         # Compute integrals
         I0 = self._get_integral(prev_grid, roots, order=0)
@@ -350,7 +374,7 @@ class Quantizer():
         return self.model.one_step_roots_unsigned_derivative(prev_grid, vor)
 
     # TODO: wrap 3 following methods in reparametrization object
-    def _optim_transform(self, prev_grid, grid):
+    def _transform(self, prev_grid, grid):
         assert grid.ndim == 1
         assert prev_grid.ndim == 1
         assert grid.size == self.nquant
@@ -368,7 +392,7 @@ class Quantizer():
         assert np.all(np.isfinite(x))
         return x
 
-    def _optim_inv_transform(self, prev_grid, x):
+    def _inverse_transform(self, prev_grid, x):
         assert x.ndim == 1
         assert prev_grid.ndim == 1
         assert x.size == self.nquant
@@ -383,15 +407,39 @@ class Quantizer():
         assert np.all(grid>0)
         return grid
 
-    def _optim_jacobian(self, prev_grid, x):
+    def _trans_jacobian(self, prev_grid, x):
+        assert x.ndim == 1
         assert prev_grid.ndim == 1
-        all_exp = np.exp(x[np.newaxis,:])
-        mask = np.tril(np.ones((self.nquant, self.nquant), float))
+        assert x.size == self.nquant
+        assert prev_grid.size == self.nquant
+        h_ = self._get_minimal_variance(prev_grid)
+        assert h_>0
+        all_exp = np.exp(x[np.newaxis,:])*h_/self.nquant
+        mask = np.tril(np.ones((self.nquant, self.nquant)))
         return all_exp*mask
+
+    def _trans_hessian_correction(self, prev_grid, gradient, x):
+        assert prev_grid.ndim == 1
+        assert gradient.ndim == 1
+        assert x.ndim == 1
+        assert prev_grid.size == self.nquant
+        assert gradient.size == self.nquant
+        assert x.size == self.nquant
+        h_ = self._get_minimal_variance(prev_grid)
+        all_exp = np.exp(x)*h_/self.nquant
+        corr = np.zeros((self.nquant,self.nquant))
+        for i in range(self.nquant):
+            mask = np.zeros(self.nquant)
+            mask[:i+1] = 1.
+            corr += gradient[i]*np.diag(mask*all_exp)
+        return corr
 
     def _get_minimal_variance(self, prev_grid):
         assert prev_grid.ndim == 1
-        return self.model.omega + self.model.beta*prev_grid[0]
+        assert prev_grid.size == self.nquant
+        h_ = self.model.omega + self.model.beta*prev_grid[0]
+        assert h_>0
+        return h_
 
     @staticmethod
     def _get_voronoi(grid):

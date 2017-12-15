@@ -51,6 +51,11 @@ class TestNumericalDerivatives(pymaat.testing.TestCase):
         expected_der = self.scalar_to_scalar_der(self.test_scalar_arg)
         self.assert_almost_equal(der, expected_der, rtol=1e-6, atol=1e-6)
 
+    def test_derivative_at_zero_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            der = pymaat.findiff.derivative_at(
+                    self.scalar_to_scalar_func, 0)
+
     def test_gradient(self):
         grad = pymaat.findiff.gradient_at(
                 self.multi_to_scalar_func, self.test_multi_arg)

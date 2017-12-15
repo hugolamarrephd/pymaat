@@ -461,7 +461,7 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
             prev_grid, voronoi, roots)
 
     def quantized_integral(self, func, grid):
-        OVER = 10
+        OVER = 10 # neglect range outside [-over,over]
         prev_grid = self.prev_grid.squeeze()
         grid = grid.squeeze()
         def do_integration(bounds, prev_h, h):
@@ -592,9 +592,9 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
         self.assert_integral_derivative(order=2, lag=1)
 
     def marginal_distortion(self, grid):
-        dist = self.quantized_integral(
+        distortion = self.quantized_integral(
                 lambda z,H,h: (H-h)**2. * norm.pdf(z), grid)
-        return self.prev_proba.dot(dist).sum()
+        return self.prev_proba.dot(distortion).sum()
 
     def test_one_step_distortion(self):
         value, _, _ = self.quant._do_one_step_distortion(
@@ -629,17 +629,17 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
 
     def test_trans_reverts(self):
         x = np.array([-0.213,0.432,0.135,0.542])
-        grid = self.quant._optim_inv_transform(
+        grid = self.quant._inverse_transform(
                 self.prev_grid.squeeze(), x)
-        x_ = self.quant._optim_transform(
+        x_ = self.quant._transform(
                 self.prev_grid.squeeze(), grid)
         self.assert_almost_equal(x, x_)
 
     def assert_inv_trans_is_in_space_for(self, x):
         x = np.array(x)
-        grid = self.quant._optim_inv_transform(
+        grid = self.quant._inverse_transform(
                 self.prev_grid.squeeze(), x)
-        h_ = self.quant._get_minimal_variance(self.prev_grid)
+        h_ = self.quant._get_minimal_variance(self.prev_grid.squeeze())
         self.assert_equal(np.diff(grid)>0, True, msg='is not sorted')
         self.assert_true(grid[1]>h_)
         self.assert_true(0.5*(grid[0]+grid[1])>h_)
@@ -649,79 +649,90 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
         self.assert_inv_trans_is_in_space_for([-5.123,-3.243,5.234,2.313])
         self.assert_inv_trans_is_in_space_for([3.234,-6.3123,-5.123,0.542])
 
-    # def test_trans_jacobian(self):
-    #     x = np.array([-0.213,0.432,0.135,0.542])
-    #     jac = partial(self.quant._optim_jacobian,
-    #             self.prev_grid)
-    #     func = partial(self.quant._optim_inv_transform,
-    #             self.prev_grid)
-    #     self.assert_jacobian_at(jac, func, x, rtol=1e-6, atol=1e-8)
-    # def test_one_step_distortion_transformed(self):
-    #     at = self.quant._optim_transform(self.prev_grid,
-    #         self.grid)
-    #     # Test distortion
-    #     value, _, _ = self.quant._one_step_distortion(
-    #                 self.prev_grid,
-    #                 self.prev_proba,
-    #                 at)
-    #     expected_value = self.marginal_distortion(at)
-    #     self.assert_almost_equal(value, expected_value, rtol=1e-2,
-    #             msg='Incorrect distortion')
+    def test_trans_jacobian(self):
+        x = np.array([-0.213,0.432,0.135,0.542])
+        jac = partial(self.quant._trans_jacobian,
+                self.prev_grid.squeeze())
+        func = partial(self.quant._inverse_transform,
+                self.prev_grid.squeeze())
+        self.assert_jacobian_at(jac, func, x, rtol=1e-6, atol=1e-8)
 
-    # def test_one_step_distortion_transformed_gradient(self):
-    #     at = self.quant._optim_transform(self.prev_grid,
-    #         self.grid)
-    #     def gradient(grid):
-    #             _, g, _ = self.quant._one_step_distortion(
-    #                 self.prev_grid,
-    #                 self.prev_proba,
-    #                 grid)
-    #             return g
-    #     func = self.marginal_distortion
-    #     self.assert_gradient_at(gradient, func, at, rtol=1e-2)
+    # Test transformed distortion function
 
-    # def test_one_step_distortion_transformed_hessian(self):
-    #     at = self.quant._optim_transform(self.prev_grid,
-    #         self.grid)
-    #     def hessian(grid):
-    #             _, _, h = self.quant._one_step_distortion(
-    #                 self.prev_grid,
-    #                 self.prev_proba,
-    #                 grid)
-    #             return h
-    #     func = self.marginal_distortion
-    #     self.assert_hessian_at(hessian, func, at, rtol=1e-6)
+    def marginal_distortion_transformed(self, x):
+        grid = self.quant._inverse_transform(self.prev_grid.squeeze(), x)
+        distortion = self.marginal_distortion(grid)
+        return distortion/VAR_LEVEL**2.
 
-    # def test_trans_proba_size(self):
-    #     trans = self.quant._transition_probability(
-    #             self.prev_grid, self.grid)
-    #     self.assert_equal(trans.shape, (self.nquant, self.nquant))
+    def test_one_step_distortion_transformed(self):
+        at = np.array([ 0.47964318,  1.07353684,  0.86325162,  0.23725981])
+        # Test distortion
+        value = self.quant._transformed_distortion(
+                    self.prev_grid.squeeze(),
+                    self.prev_proba.squeeze(),
+                    at)
+        expected_value = self.marginal_distortion_transformed(at)
+        self.assert_almost_equal(value, expected_value,
+                msg='Incorrect distortion')
 
-    # def test_trans_proba_sum_to_one_and_non_negative(self):
-    #     trans = self.quant._transition_probability(
-    #             self.prev_grid, self.grid)
-    #     self.assert_equal(trans>=0, True)
-    #     self.assert_almost_equal(np.sum(trans,axis=1),1)
+    def test_one_step_distortion_transformed_gradient(self):
+        at = np.array([ 0.47964318,  1.07353684,  0.86325162,  0.23725981])
+        def gradient(x):
+                grad = self.quant._transformed_distortion_gradient(
+                    self.prev_grid.squeeze(),
+                    self.prev_proba.squeeze(),
+                    x)
+                return grad
+        func = self.marginal_distortion_transformed
+        self.assert_gradient_at(gradient, func, at)
 
-    # def test_trans_proba(self):
-    #     value = self.quant._transition_probability(
-    #             self.prev_grid,
-    #             self.grid)
-    #     expected_value = self.quantized_integral(
-    #             'pdf', self.prev_grid, self.grid)
-    #     self.assert_almost_equal(value, expected_value)
+    def test_one_step_distortion_transformed_hessian(self):
+        at = np.array([ 0.47964318,  1.07353684,  0.86325162,  0.23725981])
+        def hessian(x):
+                hess = self.quant._transformed_distortion_hessian(
+                    self.prev_grid.squeeze(),
+                    self.prev_proba.squeeze(),
+                    x)
+                return hess
+        func = self.marginal_distortion_transformed
+        self.assert_hessian_at(hessian, func, at, rtol=1e-2)
 
-    # def test_transition_probability_from_first_grid(self):
-    #     first_variance = 1e-4
-    #     grid, *_ = self.quant._initialize(first_variance)
-    #     trans = self.quant._transition_probability(grid[0],self.grid)
-    #     first_row = trans[0]
-    #     self.assert_equal(trans==first_row, True)
+    # Test transition probabilities
 
-    # def test_one_step_quantize_sorted(self):
-    #     (_, new_grid) = self.quant._one_step_quantize(
-    #             self.prev_grid, self.prev_proba)
-    #     self.assert_almost_equal(new_grid, np.sort(new_grid))
-#     def test_quantize(self):
-#         quant = pymaat.models.Quantizer(self.model, nquant=10)
-#         quant.quantize((0.18**2)/252)
+    def test_trans_proba_size(self):
+        trans = self.quant._transition_probability(
+                self.prev_grid.squeeze(),
+                self.grid.squeeze())
+        self.assert_equal(trans.shape, (self.nquant, self.nquant))
+
+    def test_trans_proba_sum_to_one_and_non_negative(self):
+        trans = self.quant._transition_probability(
+                self.prev_grid.squeeze(),
+                self.grid.squeeze())
+        self.assert_equal(trans>=0, True)
+        self.assert_almost_equal(np.sum(trans,axis=1),1)
+
+    def test_trans_proba(self):
+        value = self.quant._transition_probability(
+                self.prev_grid.squeeze(),
+                self.grid.squeeze())
+        expected_value = self.quantized_integral(
+                lambda z,H,h: norm.pdf(z), self.grid)
+        self.assert_almost_equal(value, expected_value)
+
+    def test_transition_probability_from_first_grid(self):
+        first_variance = 1e-4
+        grid, *_ = self.quant._initialize(first_variance)
+        trans = self.quant._transition_probability(
+                grid[0],self.grid.squeeze())
+        first_row = trans[0]
+        self.assert_equal(trans==first_row, True)
+
+    def test_one_step_quantize_sorted(self):
+        (_, new_grid) = self.quant._one_step_quantize(
+                self.prev_grid.squeeze(), self.prev_proba.squeeze())
+        self.assert_almost_equal(new_grid, np.sort(new_grid))
+
+    def test_quantize(self):
+        quant = pymaat.models.Quantizer(self.model, nquant=10)
+        quant.quantize((0.18**2)/252)
