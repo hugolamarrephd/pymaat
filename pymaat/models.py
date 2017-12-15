@@ -3,6 +3,7 @@ from functools import partial, wraps
 import numpy as np
 import scipy.optimize
 from scipy.stats import norm
+import collections
 
 VAR_LEVEL = 0.18**2./252.
 
@@ -189,7 +190,10 @@ class Garch():
         variances[0] = first_variances
         return variances
 
-class Quantizer():
+Quantization = collections.namedtuple('Quantization',
+        ['values', 'probabilities', 'transition_probabilities'])
+
+class MarginalVarianceQuantizer():
     def __init__(self, model, *, nper=21, nquant=100):
         self.model = model
         self.nper = nper
@@ -200,19 +204,20 @@ class Quantizer():
         first_variance = np.atleast_1d(first_variance)
         if first_variance.shape != (1,):
             raise ValueError
+
         # Initialize results
         grid, proba, trans = self._initialize(first_variance)
+
         # Perform marginal variance quantization
         for t in range(1,self.nper+1):
-            success, grid[t] = self._one_step_quantize(grid[t-1], proba[t-1])
+            success, fun, grid[t] = self._one_step_quantize(
+                    grid[t-1], proba[t-1])
             if not success: # Early failure
                 raise RuntimeError
             trans[t-1] = self._transition_probability(grid[t-1], grid[t])
             proba[t] = proba[t-1][np.newaxis,:].dot(trans[t-1])
-            print_vol(grid[t])
-            print(proba[t]*100)
-            print(trans[t-1]*100)
-        # return quantization
+
+        return Quantization(grid, proba, trans)
 
     def _initialize(self, first_variance):
         grid = np.empty((self.nper+1, self.nquant), float)
@@ -223,9 +228,11 @@ class Quantizer():
         trans = np.empty((self.nper, self.nquant, self.nquant), float)
         return (grid, proba, trans)
 
-    def _one_step_quantize(self, prev_grid, prev_proba, *, init=None):
+    def _one_step_quantize(self, prev_grid, prev_proba, *,
+            init=None, recursion=0, max_try=5):
         if init is None:
             init = np.zeros(self.nquant)
+        # Warm-up functions
         distortion = partial(self._transformed_distortion,
                 prev_grid,
                 prev_proba)
@@ -235,15 +242,30 @@ class Quantizer():
         hessian = partial(self._transformed_distortion_hessian,
                 prev_grid,
                 prev_proba)
-        opt = {'disp':False, 'maxiter':np.inf, 'gtol':1e-8}
+        # We let the minimization run until the predicted reduction
+        #   in distortion hits zero (or less) by setting gtol=0
+        #   and expect a status flag of 2.
         sol = scipy.optimize.minimize(distortion, init,
                 method='trust-ncg',
                 jac=gradient,
                 hess=hessian,
-                options=opt)
+                options={'disp':True, 'maxiter':np.inf, 'gtol':0})
+        optim_fun = sol.fun
+        optim_x = sol.x
+        optim_grid = self._inverse_transform(prev_grid, optim_x)
+        # Catch stall gradient areas
+        if recursion<max_try and np.any(sol.jac == 0.):
+            #Re-initialize components having stall gradients
+            optim_x[sol.jac == 0.] = 0.
+            success, new_fun, new_grid = self._one_step_quantize(
+                    prev_grid, prev_proba,
+                    init=optim_x,
+                    recursion=recursion+1,
+                    max_try=max_try)
+            assert new_fun<=optim_fun
+            return success, new_fun, new_grid
         # Format output
-        opt_grid = self._inverse_transform(prev_grid, sol.x)
-        return sol.success, opt_grid
+        return sol.status==2, optim_fun, optim_grid
 
     def _transformed_distortion(self, prev_grid, prev_proba, x):
         grid = self._inverse_transform(prev_grid, x)

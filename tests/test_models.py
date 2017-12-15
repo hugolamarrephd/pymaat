@@ -432,7 +432,7 @@ class TestGarch(TestTimeseriesGarchFixture,
     #     self.assert_almost_equal(nll, 0.5)
     #     nll = self.model.negative_log_likelihood(0, np.exp(1))
     #     self.assert_almost_equal(nll, 0.5)
-class TestGarchQuantizer(pymaat.testing.TestCase):
+class TestMarginalVarianceQuantizer(pymaat.testing.TestCase):
 
     model = pymaat.models.Garch(
             mu=2.01,
@@ -442,7 +442,8 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
             gamma=196.21)
     nper = 3
     nquant = 4
-    quant = pymaat.models.Quantizer(model, nper=nper, nquant=nquant)
+    quant = pymaat.models.MarginalVarianceQuantizer(
+            model, nper=nper, nquant=nquant)
 
     prev_grid = VAR_LEVEL * np.array(
         [0.55812529,0.7532432,1.,1.4324])
@@ -728,11 +729,27 @@ class TestGarchQuantizer(pymaat.testing.TestCase):
         first_row = trans[0]
         self.assert_equal(trans==first_row, True)
 
-    def test_one_step_quantize_sorted(self):
-        (_, new_grid) = self.quant._one_step_quantize(
+    def test_one_step_quantize_is_sorted(self):
+        (_, _, optim_grid) = self.quant._one_step_quantize(
                 self.prev_grid.squeeze(), self.prev_proba.squeeze())
-        self.assert_almost_equal(new_grid, np.sort(new_grid))
+        self.assert_almost_equal(optim_grid, np.sort(optim_grid))
 
-    def test_quantize(self):
-        quant = pymaat.models.Quantizer(self.model, nquant=10)
-        quant.quantize((0.18**2)/252)
+    def get_optim_grid_from(self, init):
+        (success, fun, optim) = self.quant._one_step_quantize(
+                self.prev_grid.squeeze(), self.prev_proba.squeeze(),
+                init=init)
+        assert success
+        return optim
+
+    def test_one_step_quantize_converges_to_same_from_diff_init(self):
+        optim1 = self.get_optim_grid_from(
+            np.array([0.57234,-0.324234,3.4132,-2.123]))
+        optim2 = self.get_optim_grid_from(
+            np.array([-1.423,0.0234,-3.234,5.324]))
+        optim3 = self.get_optim_grid_from(
+            np.array([-0.0234,0.,0.002,1.234]))
+        optim4 = self.get_optim_grid_from(
+            np.array([-10,2.32,5.324,10.234]))
+        self.assert_almost_equal(optim1, optim2)
+        self.assert_almost_equal(optim2, optim3)
+        self.assert_almost_equal(optim3, optim4)
