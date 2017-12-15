@@ -9,11 +9,11 @@ import pymaat.testing
 import pymaat.model
 import pymaat.quant
 
-VAR_LEVEL = pymaat.models.VAR_LEVEL
+VAR_LEVEL = pymaat.quant.VAR_LEVEL
 
 class TestMarginalVarianceQuantizer(pymaat.testing.TestCase):
 
-    model = pymaat.models.Garch(
+    model = pymaat.model.Garch(
             mu=2.01,
             omega=9.75e-20,
             alpha=4.54e-6,

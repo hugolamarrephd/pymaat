@@ -5,6 +5,8 @@ import scipy.optimize
 from scipy.stats import norm
 import collections
 
+VAR_LEVEL = 0.18**2./252.
+
 Quantization = collections.namedtuple('Quantization',
         ['values', 'probabilities', 'transition_probabilities'])
 
@@ -64,7 +66,7 @@ class MarginalVarianceQuantizer():
                 method='trust-ncg',
                 jac=gradient,
                 hess=hessian,
-                options={'disp':True, 'maxiter':np.inf, 'gtol':0})
+                options={'disp':False, 'maxiter':np.inf, 'gtol':0})
         optim_fun = sol.fun
         optim_x = sol.x
         optim_grid = self._inverse_transform(prev_grid, optim_x)

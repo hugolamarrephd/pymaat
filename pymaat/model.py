@@ -1,8 +1,7 @@
 from functools import partial, wraps
 
 import numpy as np
-
-VAR_LEVEL = 0.18**2./252.
+from scipy.stats import norm
 
 def print_vol(daily_variance):
     print(np.sqrt(daily_variance*252)*100)
