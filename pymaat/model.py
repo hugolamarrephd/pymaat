@@ -59,14 +59,14 @@ class Garch():
             (variances[t+1], innovations[t]) = self.one_step_filter(r,h)
         return (variances, innovations)
 
-    def timeseries_simulate(self, innovations, first_variances):
+    def timeseries_generate(self, innovations, first_variances):
         self._raise_value_error_if_any_invalid_variance(first_variances)
         # Initialize ouputs
         returns = np.empty_like(innovations)
         variances = self._init_variances_like(innovations, first_variances)
         # Apply filter
         for (t,(z,h)) in enumerate(zip(innovations, variances)):
-            (variances[t+1], returns[t]) = self.one_step_simulate(z,h)
+            (variances[t+1], returns[t]) = self.one_step_generate(z,h)
         return (variances, returns)
 
     @instance_returns_numpy_or_scalar(output_type=(float,float))
@@ -78,7 +78,7 @@ class Garch():
         return (next_variances, innovations)
 
     @instance_returns_numpy_or_scalar(output_type=(float,float))
-    def one_step_simulate(self, innovations, variances):
+    def one_step_generate(self, innovations, variances):
         volatilities = np.sqrt(variances)
         returns = (self.mu-0.5)*variances + volatilities*innovations
         next_variances = self._one_step_equation(innovations,
@@ -103,8 +103,7 @@ class Garch():
         return der
 
     @instance_returns_numpy_or_scalar(output_type=float)
-    def one_step_expectation_until(self, variances, innovations,
-            order=1):
+    def one_step_expectation_until(self, variances, innovations, order=1):
         '''
             Integrate
             ```
@@ -113,55 +112,45 @@ class Garch():
             from -infty to innovations
         '''
         # Compute factors
-        if order==1:
-            cdf_factor_func = self._one_step_expectation_cdf_factor
-            pdf_factor_func = self._one_step_expectation_pdf_factor
+        if order==0:
+            cdf_factor = np.ones_like(variances)
+            pdf_factor = np.zeros_like(innovations)
+        elif order==1:
+            cdf_factor = (self.omega + self.alpha
+                    + (self.beta+self.alpha*self.gamma**2) * variances)
+            pdf_factor = 2*self.gamma*np.sqrt(variances)-innovations
+            pdf_factor *= self.alpha
         elif order==2:
-            cdf_factor_func = self._one_step_expectation_squared_cdf_factor
-            pdf_factor_func = self._one_step_expectation_squared_pdf_factor
+            vol = variances**0.5
+            gamma_vol = self.gamma*vol
+            gamma_vol_squared = gamma_vol**2.
+            innovations_squared = innovations**2.
+            betah_plus_omega = self.beta*variances + self.omega
+            cdf_factor = (self.alpha**2.
+                    *(gamma_vol_squared*(gamma_vol_squared+6.)+3.)
+                    + 2.*self.alpha*(gamma_vol_squared+1.)*betah_plus_omega
+                    + betah_plus_omega**2.)
+            pdf_factor = (self.alpha
+                        *(2.*gamma_vol_squared*(2.*gamma_vol-3.*innovations)
+                        + 4.*gamma_vol*(innovations_squared+2.)
+                        - innovations*(innovations_squared+3.))
+                        + 2.*(2.*gamma_vol-innovations)*betah_plus_omega)
+            pdf_factor *= self.alpha
         else:
-            raise ValueError
-        cdf_factor = cdf_factor_func(variances)
-        pdf_factor = pdf_factor_func(variances, innovations)
+            raise ValueError('Only supports order 0,1 and 2.')
         # Limit cases (innovations = +- infinity)
         # PDF has exponential decrease towards zero that overwhelms
         # any polynomials, e.g. `(z+z**2)*exp(-z**2)->0`
         # => Set PDF factor to zero to avoid `inf*zero` indeterminations
         limit_cases = np.isinf(innovations)
-        limit_cases = np.logical_and(limit_cases, # Hack for broadcasting
-                np.ones_like(variances, dtype=bool))
+        # Numpy does not seem to handle broadcasting of boolean
+        # indexes...
+        limit_cases = np.broadcast_to(limit_cases, pdf_factor.shape)
         pdf_factor[limit_cases] = 0
         # Compute integral
         cdf = norm.cdf(innovations)
         pdf = norm.pdf(innovations)
         return cdf_factor*cdf + pdf_factor*pdf
-
-    def _one_step_expectation_cdf_factor(self, variances):
-        return (self.omega + self.alpha
-                    + (self.beta+self.alpha*self.gamma**2) * variances)
-
-    def _one_step_expectation_pdf_factor(self, variances, innovations):
-        return (self.alpha *
-                    (2*self.gamma*np.sqrt(variances)-innovations))
-
-    def _one_step_expectation_squared_cdf_factor(self, variances):
-        gamma_vol_squared = self.gamma**2.*variances
-        betah_plus_omega = self.beta*variances + self.omega
-        return (self.alpha**2.*(gamma_vol_squared*(gamma_vol_squared+6.)+3.)
-                + 2.*self.alpha*(gamma_vol_squared+1.)*betah_plus_omega
-                + betah_plus_omega**2.)
-
-    def _one_step_expectation_squared_pdf_factor(self, variances, innovations):
-        vol = variances**0.5
-        gamma_vol = self.gamma*vol
-        gamma_vol_squared = gamma_vol**2.
-        innovations_squared = innovations**2.
-        betah_plus_omega = self.beta*variances + self.omega
-        return (self.alpha*(
-            self.alpha*(2.*gamma_vol_squared*(2.*gamma_vol-3.*innovations)
-            + 4.*gamma_vol*(innovations_squared+2.)
-            - innovations*(innovations_squared+3.))
-            + 2.*(2.*gamma_vol-innovations)*betah_plus_omega))
 
     @instance_returns_numpy_or_scalar(output_type=bool)
     def one_step_has_roots(self,variances, next_variances):
@@ -185,4 +174,3 @@ class Garch():
         variances = np.empty(var_shape)
         variances[0] = first_variances
         return variances
-

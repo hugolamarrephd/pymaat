@@ -45,16 +45,16 @@ class TestTimeseriesGarchFixture():
                 returns,
                 self.__first_variance)
 
-    def timeseries_simulate(self, innovations=__innovations):
-        return self.model.timeseries_simulate(
+    def timeseries_generate(self, innovations=__innovations):
+        return self.model.timeseries_generate(
                 innovations,
                 self.__first_variance)
 
-    def test_simulate_revertsto_filter(self):
-        simulated_variances, simulated_returns = self.timeseries_simulate()
+    def test_generate_revertsto_filter(self):
+        generated_variances, generated_returns = self.timeseries_generate()
         filtered_variances, filtered_innovations = \
-                self.timeseries_filter(returns=simulated_returns)
-        self.assert_almost_equal(simulated_variances, filtered_variances)
+                self.timeseries_filter(returns=generated_returns)
+        self.assert_almost_equal(generated_variances, filtered_variances)
         self.assert_almost_equal(self.__innovations, filtered_innovations)
 
     def test_filter_initialize_variance(self):
@@ -62,9 +62,9 @@ class TestTimeseriesGarchFixture():
         self.assert_almost_equal(filtered_variance[0],
                 self.__first_variance)
 
-    def test_filter_simulate_variance(self):
-        simulated_variance, _ = self.timeseries_simulate()
-        self.assert_almost_equal(simulated_variance[0],
+    def test_filter_generate_variance(self):
+        generated_variance, _ = self.timeseries_generate()
+        self.assert_almost_equal(generated_variance[0],
                 self.__first_variance)
 
     def test_filter_size(self):
@@ -84,21 +84,21 @@ class TestTimeseriesGarchFixture():
         with self.assertRaises(ValueError):
             self.model.timeseries_filter(np.nan, 0)
 
-    def test_simulate_size(self):
-        variances, returns = self.timeseries_simulate()
+    def test_generate_size(self):
+        variances, returns = self.timeseries_generate()
         self.assert_equal(variances.shape,
                 (self.__shape[0]+1,) + self.__shape[1:])
         self.assert_equal(returns.shape, self.__shape)
 
-    def test_simulate_positive_variance(self):
-        variances,_ = self.timeseries_simulate()
+    def test_generate_positive_variance(self):
+        variances,_ = self.timeseries_generate()
         self.assert_equal(variances>0, True)
 
-    def test_simulate_throws_exception_when_non_positive_variance(self):
+    def test_generate_throws_exception_when_non_positive_variance(self):
         with self.assertRaises(ValueError):
-            self.model.timeseries_simulate(np.nan, -1)
+            self.model.timeseries_generate(np.nan, -1)
         with self.assertRaises(ValueError):
-            self.model.timeseries_simulate(np.nan, 0)
+            self.model.timeseries_generate(np.nan, 0)
 
 class TestOneStepGarchFixture():
 
@@ -145,7 +145,7 @@ class TestOneStepGarchFixture():
 
     def get_one_step_funcs(self):
         return [self.model.one_step_filter,
-               self.model.one_step_simulate,
+               self.model.one_step_generate,
                self.model.one_step_has_roots,
                self.model.one_step_roots,
                self.model.one_step_roots_unsigned_derivative,
@@ -198,22 +198,22 @@ class TestOneStepGarchFixture():
     def one_step_filter(self, returns=__returns):
         return self.model.one_step_filter(returns, self.__variances)
 
-    def one_step_simulate(self, innovations=__innovations):
-        return self.model.one_step_simulate(innovations, self.__variances)
+    def one_step_generate(self, innovations=__innovations):
+        return self.model.one_step_generate(innovations, self.__variances)
 
-    def test_one_step_simulate_revertsto_filter(self):
-        simulated_variances, simulated_returns = self.one_step_simulate()
+    def test_one_step_generate_revertsto_filter(self):
+        generated_variances, generated_returns = self.one_step_generate()
         filtered_variances, filtered_innovations = self.one_step_filter(
-                returns=simulated_returns)
-        self.assert_almost_equal(simulated_variances, filtered_variances)
+                returns=generated_returns)
+        self.assert_almost_equal(generated_variances, filtered_variances)
         self.assert_almost_equal(self.__innovations, filtered_innovations)
 
     def test_one_step_filter_positive_variance(self):
         next_variances, _ = self.one_step_filter()
         self.assert_equal(next_variances>0, True)
 
-    def test_one_step_simulate_positive_variance(self):
-        next_variances, _ = self.one_step_simulate()
+    def test_one_step_generate_positive_variance(self):
+        next_variances, _ = self.one_step_generate()
         self.assert_equal(next_variances>0, True)
 
     # One-step innovation roots
@@ -238,7 +238,7 @@ class TestOneStepGarchFixture():
                 variances,
                 next_variances)
         for (z,s) in zip((left_roots, right_roots), ('left', 'right')):
-            next_variances_solved, _ = self.model.one_step_simulate(
+            next_variances_solved, _ = self.model.one_step_generate(
                 z, variances)
             self.assert_almost_equal(next_variances_solved, next_variances,
                     msg='Invalid ' + s + ' roots.')
@@ -324,7 +324,7 @@ class TestOneStepGarchFixture():
             [0.123,-0.542,-1.3421,1.452,5.234,-3.412,10])
     def test_one_step_expectation_until(self):
         def func_to_integrate(z):
-            (h, _) = self.model.one_step_simulate(z, VAR_LEVEL)
+            (h, _) = self.model.one_step_generate(z, VAR_LEVEL)
             return h * norm.pdf(z)
         integral = partial(self.model.one_step_expectation_until, VAR_LEVEL)
         self.assert_integral_until(integral, func_to_integrate,
@@ -336,7 +336,7 @@ class TestOneStepGarchFixture():
 
     def test_one_step_expectation_squared_until(self):
         def func_to_integrate(z):
-            (h, _) = self.model.one_step_simulate(z, VAR_LEVEL)
+            (h, _) = self.model.one_step_generate(z, VAR_LEVEL)
             return h**2. * norm.pdf(z)
         integral = partial(self.model.one_step_expectation_until, VAR_LEVEL,
                 order=2)
@@ -367,11 +367,11 @@ class TestGarch(TestTimeseriesGarchFixture,
                 + self.model.beta
                 + self.model.alpha * (innov - self.model.gamma) ** 2)
 
-    def test_one_step_simulate_at_few_values(self):
-        next_var, ret = self.model.one_step_simulate(0, 0)
+    def test_one_step_generate_at_few_values(self):
+        next_var, ret = self.model.one_step_generate(0, 0)
         self.assert_almost_equal(ret, 0)
         self.assert_almost_equal(next_var, self.model.omega)
-        next_var, ret = self.model.one_step_simulate(0, 1)
+        next_var, ret = self.model.one_step_generate(0, 1)
         self.assert_almost_equal(ret, self.model.mu-0.5)
         self.assert_almost_equal(next_var,
                   self.model.omega
@@ -386,45 +386,6 @@ class TestGarch(TestTimeseriesGarchFixture,
                 alpha=0.5,
                 beta=0.5,
                 gamma=1)
-
-    def test_one_step_expectation_cdf_factor(self):
-        value = self.model._one_step_expectation_cdf_factor(VAR_LEVEL)
-        expected_value = (self.model.omega + self.model.alpha
-                + (self.model.beta+
-                self.model.alpha*self.model.gamma**2) * VAR_LEVEL)
-        self.assert_almost_equal(value, expected_value)
-
-    def test_one_step_expectation_squared_cdf_factor(self):
-        value = self.model._one_step_expectation_squared_cdf_factor(
-                VAR_LEVEL)
-        a = (self.model.omega +
-                (self.model.beta+self.model.alpha*self.model.gamma**2.)
-                *VAR_LEVEL)
-        b = 2.*self.model.alpha*self.model.gamma*VAR_LEVEL**0.5
-        c = self.model.alpha
-        expected_value = (a**2. + 2.*a*c + b**2. + 3.*c**2)
-        self.assert_almost_equal(value, expected_value)
-
-    def test_one_step_expectation_pdf_factor(self):
-        innovations = 1.453
-        value = self.model._one_step_expectation_pdf_factor(
-                VAR_LEVEL, innovations)
-        expected_value = (self.model.alpha * (2.*self.model.gamma*VOL_LEVEL-
-                innovations))
-        self.assert_almost_equal(value, expected_value)
-
-    def test_one_step_expectation_squared_pdf_factor(self):
-        z = 1.453
-        value = self.model._one_step_expectation_squared_pdf_factor(
-                VAR_LEVEL, z)
-        a = (self.model.omega +
-                (self.model.beta+self.model.alpha*self.model.gamma**2.)
-                *VAR_LEVEL)
-        b = 2.*self.model.alpha*self.model.gamma*VAR_LEVEL**0.5
-        c = self.model.alpha
-        expected_value = (2.*a*b - 2.*a*c*z - b**2.*z + 2.*b*c*(z**2.+2.)
-                -c**2.*z*(z**2.+3.))
-        self.assert_almost_equal(value, expected_value)
 
     # TODO: send to estimator
     # def test_neg_log_like_at_few_values(self):

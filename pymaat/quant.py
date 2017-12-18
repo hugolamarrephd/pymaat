@@ -1,42 +1,51 @@
 from functools import partial, wraps
+import collections
+import weakref
 
 import numpy as np
 import scipy.optimize
 from scipy.stats import norm
-import collections
 
-VAR_LEVEL = 0.18**2./252.
+MAX_VAR_QUANT_TRY = 5
 
 Quantization = collections.namedtuple('Quantization',
         ['values', 'probabilities', 'transition_probabilities'])
 
-class MarginalVarianceQuantizer():
+def get_voronoi(grid, lb=-np.inf, ub=np.inf):
+    voronoi = np.concatenate((np.array([lb]),
+        grid[:-1] + 0.5*np.diff(grid, n=1),
+        np.array([ub])))
+    return voronoi
+
+class VarianceQuantizer():
     def __init__(self, model, *, nper=21, nquant=100):
         self.model = model
         self.nper = nper
         self.nquant = nquant
 
     def quantize(self, first_variance):
-        # Check input
-        first_variance = np.atleast_1d(first_variance)
-        if first_variance.shape != (1,):
-            raise ValueError
-
-        # Initialize results
+        # Initialize placeholders for results
         grid, proba, trans = self._initialize(first_variance)
 
         # Perform marginal variance quantization
         for t in range(1,self.nper+1):
-            success, fun, grid[t] = self._one_step_quantize(
-                    grid[t-1], proba[t-1])
-            if not success: # Early failure
+            # Initialize state of iteration
+            state = _VarianceQuantizerState(self, grid[t-1], proba[t-1])
+            success, optim_x = self._one_step_quantize(state)
+            if not success: # Early failure if optimizer unsuccesfull
                 raise RuntimeError
-            trans[t-1] = self._transition_probability(grid[t-1], grid[t])
-            proba[t] = proba[t-1][np.newaxis,:].dot(trans[t-1])
+            # Gather results from state...
+            grid[t] = state.get_grid(optim_x)
+            trans[t-1] = state.get_transition_probability(optim_x)
+            proba[t] = state.get_probability(optim_x)
 
         return Quantization(grid, proba, trans)
 
     def _initialize(self, first_variance):
+        # Check input
+        first_variance = np.atleast_1d(first_variance)
+        if first_variance.shape != (1,):
+            raise ValueError
         grid = np.empty((self.nper+1, self.nquant), float)
         grid[0] = first_variance
         proba = np.empty_like(grid)
@@ -45,254 +54,270 @@ class MarginalVarianceQuantizer():
         trans = np.empty((self.nper, self.nquant, self.nquant), float)
         return (grid, proba, trans)
 
-    def _one_step_quantize(self, prev_grid, prev_proba, *,
-            init=None, recursion=0, max_try=5):
+    def _one_step_quantize(self, state, init=None, try_=0):
         if init is None:
             init = np.zeros(self.nquant)
-        # Warm-up functions
-        distortion = partial(self._transformed_distortion,
-                prev_grid,
-                prev_proba)
-        gradient = partial(self._transformed_distortion_gradient,
-                prev_grid,
-                prev_proba)
-        hessian = partial(self._transformed_distortion_hessian,
-                prev_grid,
-                prev_proba)
+
         # We let the minimization run until the predicted reduction
-        #   in distortion hits zero (or less) by setting gtol=0
-        #   and expect a status flag of 2.
-        sol = scipy.optimize.minimize(distortion, init,
+        #   in distortion hits zero (or less) by setting gtol=0 and
+        #   maxiter=inf. We hence expect a status flag of 2.
+        sol = scipy.optimize.minimize(
+                lambda x: state.get_distortion(x),
+                init,
                 method='trust-ncg',
-                jac=gradient,
-                hess=hessian,
+                jac=lambda x: state.get_gradient(x),
+                hess=lambda x: state.get_hessian(x),
                 options={'disp':False, 'maxiter':np.inf, 'gtol':0})
-        optim_fun = sol.fun
-        optim_x = sol.x
-        optim_grid = self._inverse_transform(prev_grid, optim_x)
+
+        success = sol.status==2 or sol.status==0
+
         # Catch stall gradient areas
-        if recursion<max_try and np.any(sol.jac == 0.):
+        if try_<MAX_VAR_QUANT_TRY and np.any(sol.jac == 0.):
             #Re-initialize components having stall gradients
-            optim_x[sol.jac == 0.] = 0.
-            success, new_fun, new_grid = self._one_step_quantize(
-                    prev_grid, prev_proba,
-                    init=optim_x,
-                    recursion=recursion+1,
-                    max_try=max_try)
-            assert new_fun<=optim_fun
-            return success, new_fun, new_grid
+            reinit_x = sol.x.copy()
+            reinit_x[sol.jac == 0.] = 0.
+            success, sol.x = self._one_step_quantize(state,
+                    init=reinit_x,
+                    try_=try_+1)
+
         # Format output
-        return sol.status==2, optim_fun, optim_grid
+        return success, sol.x
 
-    def _transformed_distortion(self, prev_grid, prev_proba, x):
-        grid = self._inverse_transform(prev_grid, x)
-        grid = grid[np.newaxis,:] #1-by-nquant
-        prev_grid = prev_grid[:,np.newaxis] #nquant-by-1
-        prev_proba = prev_proba[np.newaxis,:] #1-by-nquant
-        distortion, _, _ = self._do_one_step_distortion(
-                prev_grid, prev_proba, grid)
-        return distortion/VAR_LEVEL**2.
 
-    def _transformed_distortion_gradient(self, prev_grid, prev_proba, x):
-        grid = self._inverse_transform(prev_grid, x)
-        grid = grid[np.newaxis,:] #1-by-nquant
-        prev_grid = prev_grid[:,np.newaxis] #nquant-by-1
-        prev_proba = prev_proba[np.newaxis,:] #1-by-nquant
-        _, gradient, _= self._do_one_step_distortion(
-                prev_grid, prev_proba, grid)
-        trans_jacobian = self._trans_jacobian(prev_grid.squeeze(), x)
-        gradient_wrt_x = gradient.dot(trans_jacobian).squeeze()
-        return gradient_wrt_x/VAR_LEVEL**2.
+class _VarianceQuantizerState():
 
-    def _transformed_distortion_hessian(self, prev_grid, prev_proba, x):
-        grid = self._inverse_transform(prev_grid, x)
-        grid = grid[np.newaxis,:] #1-by-nquant
-        prev_grid = prev_grid[:,np.newaxis] #nquant-by-1
-        prev_proba = prev_proba[np.newaxis,:] #1-by-nquant
-        _, gradient, hessian = self._do_one_step_distortion(
-                prev_grid, prev_proba, grid)
-        trans_jacobian = self._trans_jacobian(prev_grid.squeeze(), x)
-        trans_hessian_corr = self._trans_hessian_correction(
-                prev_grid.squeeze(), gradient, x)
-        hessian_wrt_x = (trans_jacobian.T.dot(hessian).dot(trans_jacobian)
-                + trans_hessian_corr)
-        return  hessian_wrt_x/VAR_LEVEL**2.
+    # Private class used by VarianceQuantizer
 
-    def _transition_probability(self, prev_grid, grid):
-        grid = grid[np.newaxis,:]
-        prev_grid = prev_grid[:,np.newaxis]
-        assert prev_grid.shape == (self.nquant, 1)
-        assert grid.shape == (1, self.nquant)
-        roots = self._get_voronoi_roots(prev_grid, grid)
-        cdf = lambda z: norm.cdf(z)
-        return self._over_range(cdf, roots)
+    def __init__(self, quant, prev_grid, prev_proba):
+        self.nquant = quant.nquant
+        self.model = quant.model
+        self.prev_grid = prev_grid
+        self.prev_proba = prev_proba
+        self.h_min = self.model.omega + self.model.beta*self.prev_grid[0]
+        # self.__cache = weakref.WeakValueDictionary()
+        self.__cache = {}
+        assert (self.prev_grid.ndim == 1
+                and self.prev_grid.shape == (self.nquant,))
+        assert (self.prev_proba.ndim == 1
+                and prev_proba.shape == (self.nquant,))
 
-    def _do_one_step_distortion(self, prev_grid, prev_proba, grid):
-        assert prev_grid.shape == (self.nquant, 1)
-        assert grid.shape == (1, self.nquant)
-        vor = self._get_voronoi(grid)
-        # First (non-zero) voronoi point must be above lower variance bound
-        assert vor[0,1]>=self._get_minimal_variance(prev_grid.squeeze())
-        roots = self._get_roots(prev_grid, vor)
-        # Compute integrals
-        I0 = self._get_integral(prev_grid, roots, order=0)
-        I1 = self._get_integral(prev_grid, roots, order=1)
-        I2 = self._get_integral(prev_grid, roots, order=2)
-        # Distortion
-        distortion = np.sum(I2 - 2.*I1*grid + I0*grid**2., axis=1)
-        distortion = prev_proba.dot(distortion)
-        distortion = distortion.squeeze()
-        assert not np.isnan(distortion)
-        # Gradient
-        gradient = -2. * prev_proba.dot(I1-I0*grid)
-        gradient = gradient.squeeze()
-        assert not np.any(np.isnan(gradient))
-        # Hessian
-        factor = self._get_factor_of_integral_derivative(
-                prev_grid, vor, roots)
-        d0 = self._get_integral_derivative(factor, vor)
-        d1 = self._get_integral_derivative(factor, vor, order=1)
-        diagonal = -2. * prev_proba.dot(d1-d0*grid-I0)
-        diagonal = diagonal.squeeze()
-        d0 = self._get_integral_derivative(factor, vor, lag=-1)
-        d1 = self._get_integral_derivative(factor, vor, order=1, lag=-1)
-        off_diagonal = -2 * prev_proba.dot(d1-d0*grid)
-        off_diagonal = off_diagonal.squeeze()
-        hessian = np.zeros((self.nquant, self.nquant))
-        for j in range(self.nquant):
-            #TODO VECTORIZE
-            hessian[j,j] = diagonal[j]
-            if j>0:
-                hessian[j-1,j] = off_diagonal[j]
-                hessian[j,j-1] = hessian[j-1,j] # make symmetric
-        assert not np.any(np.isnan(hessian))
-        return distortion, gradient, hessian
-
-    def _get_integral(self, prev_grid, roots, order=0):
-        if order==0:
-            integral_func = lambda z: norm.cdf(z)
+    def eval_at(self, x):
+        return _VarianceQuantizerEval(self, x)
+        # Caching mechanism
+        x.flags.writeable = False
+        h = hash(x.tobytes())
+        if h in self.__cache:
+            assert np.all(x==self.__cache[h].x)
+            return self.__cache[h]
         else:
-            integral_func = lambda z: self.model.one_step_expectation_until(
-                prev_grid, z, order=order)
-        return self._over_range(integral_func, roots)
+            a_new_eval =  _VarianceQuantizerEval(self, x)
+            self.__cache[h] = a_new_eval
+            return a_new_eval
 
-    def _get_integral_derivative(self, factor, vor, order=0, lag=0):
+    def get_distortion(self, x):
+        return self.eval_at(x).distortion
+
+    def get_gradient(self, x):
+        return self.eval_at(x).transformed_gradient
+
+    def get_hessian(self, x):
+        return self.eval_at(x).transformed_hessian
+
+    def get_transition_probability(self, x):
+        return self.eval_at(x).transition_probability
+
+    def get_probability(self, x):
+        return self.eval_at(x).probability
+
+    def get_grid(self, x):
+        return self.eval_at(x).grid
+
+class lazyproperty:
+    #TODO: move to utilities
+    def __init__(self, func):
+        self.func = func
+
+    def __get__(self, instance, cls):
+        if instance is None:
+            return self
+        else:
+            value = self.func(instance)
+            # replace method by property...
+            setattr(instance, self.func.__name__, value)
+            return value
+
+class _VarianceQuantizerEval():
+
+    # Private class used by _VarianceQuantizerState
+
+    def __init__(self, state, x):
+        self.state = state
+        self.x = x
+        assert self.x.ndim == 1 and self.x.shape == (self.state.nquant,)
+
+    @lazyproperty
+    def distortion(self):
+        out = np.sum(self.integrals[2]
+                - 2.*self.integrals[1]*self._grid
+                + self.integrals[0]*self._grid**2., axis=1)
+        out = self.state.prev_proba.dot(out)
+        assert not np.isnan(out)
+        return out
+
+    @lazyproperty
+    def transformed_gradient(self):
+        out = self.gradient.dot(self.jacobian)
+        assert not np.any(np.isnan(out))
+        return out
+
+    @lazyproperty
+    def transformed_hessian(self):
+        out = (self.jacobian.T.dot(self.hessian).dot(self.jacobian)
+                + self.hessian_correction)
+        assert not np.any(np.isnan(out))
+        return out
+
+    @lazyproperty
+    def transition_probability(self):
+        out = self.integrals[0]
+        assert not np.any(np.isnan(out))
+        return out
+
+    @lazyproperty
+    def probability(self):
+        out = self.state.prev_proba.dot(self.transition_probability)
+        assert not np.any(np.isnan(out))
+        return out
+
+    @lazyproperty
+    def grid(self):
+        out = np.cumsum(np.exp(self.x))
+        out = self.state.h_min * (1. + out/self.state.nquant)
+        assert np.all(np.isfinite(out))
+        assert np.all(out>0)
+        assert np.all(np.diff(out)>0)
+        return out
+
+    @lazyproperty
+    def voronoi(self):
+        out = get_voronoi(self.grid, lb=0.)
+        assert out[0] == 0.
+        assert out[1]>=self.state.h_min
+        return out
+
+    @lazyproperty
+    def roots(self):
+        out = self.state.model.one_step_roots(self._prev_grid, self._voronoi)
+        return out
+
+    @lazyproperty
+    def gradient(self):
+        out = -2. * self.state.prev_proba.dot(
+                self.integrals[1]-self.integrals[0]*self._grid)
+        assert not np.any(np.isnan(out))
+        return out
+
+    @lazyproperty
+    def hessian(self):
+        diagonal = -2. * self.state.prev_proba.dot(
+                self.integral_derivatives[0][1]
+                -self.integral_derivatives[0][0]*self._grid
+                -self.integrals[0])
+        off_diagonal = -2. * self.state.prev_proba.dot(
+                self.integral_derivatives[1][1]
+                -self.integral_derivatives[1][0]*self._grid)
+        # Build hessian
+        out = np.zeros((self.state.nquant, self.state.nquant))
+        for j in range(self.state.nquant):
+            out[j,j] = diagonal[j]
+            if j>0:
+                out[j-1,j] = off_diagonal[j]
+                out[j,j-1] =out[j-1,j] # make symmetric
+        assert not np.any(np.isnan(out))
+        return out
+
+    @lazyproperty
+    def integrals(self):
+        return [self._get_integral(order=i) for i in range(3)]
+
+    def _get_integral(self, *, order):
+        integral_func = lambda z: self.state.model.one_step_expectation_until(
+            self._prev_grid, z, order=order)
+        out = integral_func(self.roots[1]) - integral_func(self.roots[0])
+        out[np.isnan(out)] = 0
+        out = np.diff(out, n=1, axis=1)
+        return out
+
+    @lazyproperty
+    def integral_derivatives(self):
+        factor = self._get_factor_for_integral_derivative()
+        dI = [self._get_integral_derivative(factor, order=i, lag=0)
+                for i in range(2)]
+        dI_lagged = [self._get_integral_derivative(factor, order=i, lag=-1)
+                for i in range(2)]
+        return dI, dI_lagged
+
+    def _get_factor_for_integral_derivative(self):
+        root_derivative = self.state.model.one_step_roots_unsigned_derivative(
+                self._prev_grid, self._voronoi)
+        factor = (0.5 * root_derivative
+                * (norm.pdf(self.roots[0])+norm.pdf(self.roots[1])))
+        factor[np.isnan(factor)] = 0
+        return factor
+
+    def _get_integral_derivative(self, factor, order=0, lag=0):
         if order==0:
             d = factor
         elif order==1:
-            d = factor * vor
+            d = factor * self._voronoi
         else:
-            d = factor * vor**order
+            d = factor * self._voronoi**order
         d[np.isnan(d)] = 0
         if lag==-1:
             d = -d[:,:-1]
             d[:,0] = np.nan # first column is meaningless
-            return d
         elif lag==0:
-            return np.diff(d, n=1, axis=1)
+            d = np.diff(d, n=1, axis=1)
         elif lag==1:
             d = d[:,1:]
             d[:,-1] = np.nan # last column is meaningless
-            return d
+        else:
+            assert False # should never happen
+        return d
 
-    def _get_factor_of_integral_derivative(self, prev_grid, vor, roots):
-        root_derivative = self._get_roots_derivatives(prev_grid, vor)
-        factor = (0.5 * root_derivative
-                * (norm.pdf(roots[0])+norm.pdf(roots[1])))
-        factor[np.isnan(factor)] = 0
-        return factor
-
-    def _get_voronoi_roots(self, prev_grid, grid):
-        vor = self._get_voronoi(grid)
-        return self._get_roots(prev_grid, vor)
-
-    def _get_roots(self, prev_grid, vor):
-        return self.model.one_step_roots(prev_grid, vor)
-
-    def _get_roots_derivatives(self, prev_grid, vor):
-        return self.model.one_step_roots_unsigned_derivative(prev_grid, vor)
-
-    # TODO: wrap 3 following methods in reparametrization object
-    def _transform(self, prev_grid, grid):
-        assert grid.ndim == 1
-        assert prev_grid.ndim == 1
-        assert grid.size == self.nquant
-        assert prev_grid.size == self.nquant
-        assert np.all(np.isfinite(grid))
-        assert np.all(np.diff(grid)>0)
-        assert np.all(grid>0)
-        h_ = self._get_minimal_variance(prev_grid)
-        assert h_>0
-        # Transformation
-        x = np.empty_like(grid)
-        x[0] = np.log(grid[0]-h_)
-        x[1:] = np.log(grid[1:]-grid[0:-1])
-        x = x + np.log(self.nquant) - np.log(h_)
-        assert np.all(np.isfinite(x))
-        return x
-
-    def _inverse_transform(self, prev_grid, x):
-        assert x.ndim == 1
-        assert prev_grid.ndim == 1
-        assert x.size == self.nquant
-        assert prev_grid.size == self.nquant
-        h_ = self._get_minimal_variance(prev_grid)
-        assert h_>0
-        # Inverse transformation
-        grid = np.cumsum(np.exp(x))
-        grid = h_ * (1.+grid/self.nquant)
-        assert np.all(np.isfinite(grid))
-        assert np.all(np.diff(grid)>0)
-        assert np.all(grid>0)
-        return grid
-
-    def _trans_jacobian(self, prev_grid, x):
-        assert x.ndim == 1
-        assert prev_grid.ndim == 1
-        assert x.size == self.nquant
-        assert prev_grid.size == self.nquant
-        h_ = self._get_minimal_variance(prev_grid)
-        assert h_>0
-        all_exp = np.exp(x[np.newaxis,:])*h_/self.nquant
-        mask = np.tril(np.ones((self.nquant, self.nquant)))
-        return all_exp*mask
-
-    def _trans_hessian_correction(self, prev_grid, gradient, x):
-        assert prev_grid.ndim == 1
-        assert gradient.ndim == 1
-        assert x.ndim == 1
-        assert prev_grid.size == self.nquant
-        assert gradient.size == self.nquant
-        assert x.size == self.nquant
-        h_ = self._get_minimal_variance(prev_grid)
-        all_exp = np.exp(x)*h_/self.nquant
-        corr = np.zeros((self.nquant,self.nquant))
-        for i in range(self.nquant):
-            mask = np.zeros(self.nquant)
-            mask[:i+1] = 1.
-            corr += gradient[i]*np.diag(mask*all_exp)
-        return corr
-
-    def _get_minimal_variance(self, prev_grid):
-        assert prev_grid.ndim == 1
-        assert prev_grid.size == self.nquant
-        h_ = self.model.omega + self.model.beta*prev_grid[0]
-        assert h_>0
-        return h_
-
-    @staticmethod
-    def _get_voronoi(grid):
-        assert np.all(np.diff(grid)>=0)
-        assert np.all(grid>0)
-        zero_column = np.zeros((grid.shape[0],1))
-        inf_column = np.full((grid.shape[0],1), np.inf)
-        return np.hstack((zero_column,
-                grid[:,:-1] + 0.5 * np.diff(grid, n=1, axis=-1),
-                inf_column))
-
-    @staticmethod
-    def _over_range(integral, roots):
-        out = integral(roots[1]) - integral(roots[0])
-        out[np.isnan(out)] = 0
-        out = np.diff(out, n=1, axis=1)
+    @lazyproperty
+    def jacobian(self):
+        all_exp = np.exp(self._x)*self.state.h_min/self.state.nquant
+        mask = np.tril(np.ones((self.state.nquant, self.state.nquant)))
+        out = all_exp*mask
+        assert not np.any(np.isnan(out))
         return out
+
+    @lazyproperty
+    def hessian_correction(self):
+        all_exp = np.exp(self.x)*self.state.h_min/self.state.nquant
+        out = np.zeros((self.state.nquant,self.state.nquant))
+        for i in range(self.state.nquant):
+            mask = np.zeros(self.state.nquant)
+            mask[:i+1] = 1.
+            out += self.gradient[i]*np.diag(mask*all_exp)
+        assert not np.any(np.isnan(out))
+        return out
+
+    # Broadcast-ready formatting
+
+    @lazyproperty
+    def _prev_grid(self):
+        return self.state.prev_grid[:,np.newaxis] #nquant-by-1
+
+    @lazyproperty
+    def _x(self):
+        return self.x[np.newaxis,:] #1-by-nquant
+
+    @lazyproperty
+    def _grid(self):
+        return self.grid[np.newaxis,:] #1-by-nquant
+
+    @lazyproperty
+    def _voronoi(self):
+        return self.voronoi[np.newaxis,:]
