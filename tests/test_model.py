@@ -6,7 +6,7 @@ import scipy.integrate as integrate
 from scipy.stats import norm
 
 import pymaat.testing
-import pymaat.model
+import pymaat.garch
 
 VAR_LEVEL = 0.18**2./252.
 VOL_LEVEL = np.sqrt(VAR_LEVEL)
@@ -352,7 +352,7 @@ class TestGarch(TestTimeseriesGarchFixture,
         TestOneStepGarchFixture,
         pymaat.testing.TestCase):
 
-    model = pymaat.model.Garch(
+    model = pymaat.garch.Garch(
             mu=2.01,
             omega=9.75e-20,
             alpha=4.54e-6,
@@ -380,7 +380,7 @@ class TestGarch(TestTimeseriesGarchFixture,
 
     def test_invalid_param_raise_exception(self):
         with self.assertRaises(ValueError):
-            pymaat.model.Garch(
+            pymaat.garch.Garch(
                 mu=0,
                 omega=0,
                 alpha=0.5,

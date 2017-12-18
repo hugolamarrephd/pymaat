@@ -1,20 +1,36 @@
 from functools import partial, wraps
 import collections
-import weakref
 
 import numpy as np
 import scipy.optimize
 from scipy.stats import norm
-
+import time
 MAX_VAR_QUANT_TRY = 5
 
 Quantization = collections.namedtuple('Quantization',
         ['values', 'probabilities', 'transition_probabilities'])
+def timethis(number = 1):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+           start = time.perf_counter()
+           t = np.empty(number)
+           for i in range(number):
+               r = func(*args, **kwargs)
+               t[i] = time.perf_counter() - start
+           print('{}.{} : {} sec'.format(
+               func.__module__,
+               func.__name__,
+               t.mean()))
+           return r
+        return wrapper
+    return decorator
 
 def get_voronoi(grid, lb=-np.inf, ub=np.inf):
-    voronoi = np.concatenate((np.array([lb]),
-        grid[:-1] + 0.5*np.diff(grid, n=1),
-        np.array([ub])))
+    voronoi = np.empty(grid.size+1)
+    voronoi[0] = lb
+    voronoi[1:-1] = grid[:-1] + 0.5*np.diff(grid, n=1)
+    voronoi[-1] = ub
     return voronoi
 
 class VarianceQuantizer():
@@ -94,7 +110,6 @@ class _VarianceQuantizerState():
         self.prev_grid = prev_grid
         self.prev_proba = prev_proba
         self.h_min = self.model.omega + self.model.beta*self.prev_grid[0]
-        # self.__cache = weakref.WeakValueDictionary()
         self.__cache = {}
         assert (self.prev_grid.ndim == 1
                 and self.prev_grid.shape == (self.nquant,))
@@ -102,7 +117,6 @@ class _VarianceQuantizerState():
                 and prev_proba.shape == (self.nquant,))
 
     def eval_at(self, x):
-        return _VarianceQuantizerEval(self, x)
         # Caching mechanism
         x.flags.writeable = False
         h = hash(x.tobytes())
@@ -191,8 +205,7 @@ class _VarianceQuantizerEval():
 
     @lazyproperty
     def grid(self):
-        out = np.cumsum(np.exp(self.x))
-        out = self.state.h_min * (1. + out/self.state.nquant)
+        out = self.state.h_min + np.cumsum(self.all_exp_x)
         assert np.all(np.isfinite(out))
         assert np.all(out>0)
         assert np.all(np.diff(out)>0)
@@ -240,10 +253,20 @@ class _VarianceQuantizerEval():
     def integrals(self):
         return [self._get_integral(order=i) for i in range(3)]
 
+    @lazyproperty
+    def pdf(self):
+        return [norm.pdf(self.roots[i]) for i in range(2)]
+
+    @lazyproperty
+    def cdf(self):
+        return [norm.cdf(self.roots[i]) for i in range(2)]
+
     def _get_integral(self, *, order):
-        integral_func = lambda z: self.state.model.one_step_expectation_until(
-            self._prev_grid, z, order=order)
-        out = integral_func(self.roots[1]) - integral_func(self.roots[0])
+        integral_func = self.state.model.one_step_expectation_until
+        integral = [integral_func(self._prev_grid, self.roots[i],
+                order=order, pdf=self.pdf[i], cdf=self.cdf[i])
+                for i in range(2)]
+        out = integral[1] - integral[0]
         out[np.isnan(out)] = 0
         out = np.diff(out, n=1, axis=1)
         return out
@@ -258,10 +281,10 @@ class _VarianceQuantizerEval():
         return dI, dI_lagged
 
     def _get_factor_for_integral_derivative(self):
-        root_derivative = self.state.model.one_step_roots_unsigned_derivative(
-                self._prev_grid, self._voronoi)
+        derivative_func = self.state.model.one_step_roots_unsigned_derivative
+        root_derivative = derivative_func(self._prev_grid, self._voronoi)
         factor = (0.5 * root_derivative
-                * (norm.pdf(self.roots[0])+norm.pdf(self.roots[1])))
+                * (self.pdf[0]+self.pdf[1]))
         factor[np.isnan(factor)] = 0
         return factor
 
@@ -286,21 +309,24 @@ class _VarianceQuantizerEval():
         return d
 
     @lazyproperty
+    def all_exp_x(self):
+        return np.exp(self.x)*self.state.h_min/self.state.nquant
+
+    @lazyproperty
     def jacobian(self):
-        all_exp = np.exp(self._x)*self.state.h_min/self.state.nquant
         mask = np.tril(np.ones((self.state.nquant, self.state.nquant)))
-        out = all_exp*mask
+        out = self.all_exp_x[np.newaxis,:]*mask
         assert not np.any(np.isnan(out))
         return out
 
     @lazyproperty
     def hessian_correction(self):
-        all_exp = np.exp(self.x)*self.state.h_min/self.state.nquant
         out = np.zeros((self.state.nquant,self.state.nquant))
+        mask = np.empty(self.state.nquant)
         for i in range(self.state.nquant):
-            mask = np.zeros(self.state.nquant)
+            mask[:] = 0.
             mask[:i+1] = 1.
-            out += self.gradient[i]*np.diag(mask*all_exp)
+            out += self.gradient[i]*np.diag(mask*self.all_exp_x)
         assert not np.any(np.isnan(out))
         return out
 
@@ -309,10 +335,6 @@ class _VarianceQuantizerEval():
     @lazyproperty
     def _prev_grid(self):
         return self.state.prev_grid[:,np.newaxis] #nquant-by-1
-
-    @lazyproperty
-    def _x(self):
-        return self.x[np.newaxis,:] #1-by-nquant
 
     @lazyproperty
     def _grid(self):

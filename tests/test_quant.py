@@ -6,26 +6,26 @@ import scipy.integrate as integrate
 from scipy.stats import norm
 
 import pymaat.testing
-import pymaat.model
-import pymaat.quant
+import pymaat.garch
+import pymaat.garch.quant
 
 class TestQuantizer(pymaat.testing.TestCase):
 
     def test_voronoi(self):
-        v = pymaat.quant.get_voronoi(np.array([1.,2.,3.]))
+        v = pymaat.garch.get_voronoi(np.array([1.,2.,3.]))
         self.assert_almost_equal(v, np.array([-np.inf,1.5,2.5,np.inf]))
 
     def test_voronoi_positive(self):
-        v = pymaat.quant.get_voronoi(np.array([1.,2.,3.]), lb=0.)
+        v = pymaat.garch.get_voronoi(np.array([1.,2.,3.]), lb=0.)
         self.assert_almost_equal(v, np.array([0.,1.5,2.5,np.inf]))
 
     def test_voronoi_negative(self):
-        v = pymaat.quant.get_voronoi(np.array([-3.,-2.,-1.]), ub=0.)
+        v = pymaat.garch.get_voronoi(np.array([-3.,-2.,-1.]), ub=0.)
         self.assert_almost_equal(v, np.array([-np.inf,-2.5,-1.5,0.]))
 
 class TestMarginalVarianceQuantizer(pymaat.testing.TestCase):
 
-    model = pymaat.model.Garch(
+    model = pymaat.garch.Garch(
             mu=2.01,
             omega=9.75e-20,
             alpha=4.54e-6,
@@ -34,16 +34,16 @@ class TestMarginalVarianceQuantizer(pymaat.testing.TestCase):
 
     nper = 3
     nquant = 4
-    quant = pymaat.quant.VarianceQuantizer(
+    quant = pymaat.garch.VarianceQuantizer(
             model, nper=nper, nquant=nquant)
 
     prev_grid = 0.18**2./252. * np.array([0.55,0.75,1.,1.43])
     prev_proba = np.array([0.2,0.25,0.45,0.10])
-    state = pymaat.quant._VarianceQuantizerState(
+    state = pymaat.garch.quant._VarianceQuantizerState(
             quant, prev_grid, prev_proba)
 
     x = np.array([ 0.47964318,  -1.07353684,  0.86325162,  0.23725981])
-    eval_ = pymaat.quant._VarianceQuantizerEval(state, x)
+    eval_ = pymaat.garch.quant._VarianceQuantizerEval(state, x)
 
     def get_integrand(self, order=0):
         if order==0:
@@ -79,7 +79,7 @@ class TestMarginalVarianceQuantizer(pymaat.testing.TestCase):
                     points=critical_pts)
             return out[0]
         # Do computations
-        voronoi = pymaat.quant.get_voronoi(grid)
+        voronoi = pymaat.garch.get_voronoi(grid)
         I = np.empty((self.nquant,self.nquant))
         for (i,prev_h) in enumerate(self.prev_grid):
             for (j,(lb,ub,h)) in enumerate(
@@ -210,7 +210,7 @@ class TestMarginalVarianceQuantizer(pymaat.testing.TestCase):
                 np.array([3.234,-6.3123,-5.123,0.542]))
 
     def transform(self, x):
-        eval_ = pymaat.quant._VarianceQuantizerEval(self.state, x)
+        eval_ = pymaat.garch.quant._VarianceQuantizerEval(self.state, x)
         return eval_.grid
 
     def test_trans_jacobian(self):
@@ -251,19 +251,6 @@ class TestMarginalVarianceQuantizer(pymaat.testing.TestCase):
                 self.eval_.grid)
         self.assert_almost_equal(value, expected_value)
 
-    def test_transition_probability_from_first_grid(self):
-        first_grid = 0.18**2./252. * np.ones(self.nquant)
-        first_proba = np.zeros(self.nquant)
-        first_proba[0] = 1.
-        first_state = pymaat.quant._VarianceQuantizerState(
-                self.quant, first_grid, first_proba)
-        x = np.array([ 0.47964318,  -1.07353684,  0.86325162,  0.23725981])
-        first_grid_eval_ = pymaat.quant._VarianceQuantizerEval(first_state, x)
-
-        trans = first_grid_eval_.transition_probability
-        first_row = trans[0]
-        self.assert_equal(trans==first_row, True)
-
     def get_optim_grid_from(self, init):
         (success, optim) = self.quant._one_step_quantize(self.state,
                 init=init)
@@ -285,7 +272,7 @@ class TestMarginalVarianceQuantizer(pymaat.testing.TestCase):
 
     def test_quantize_returns_valid_quantization(self):
         q = self.quant.quantize(0.18**2./252.)
-        self.assert_true(type(q)==pymaat.quant.Quantization)
+        self.assert_true(type(q)==pymaat.garch.quant.Quantization)
         for t in range(1,self.nper+1):
             self.assert_almost_equal(
                     q.transition_probabilities[t-1].sum(axis=1), 1.)

@@ -103,7 +103,8 @@ class Garch():
         return der
 
     @instance_returns_numpy_or_scalar(output_type=float)
-    def one_step_expectation_until(self, variances, innovations, order=1):
+    def one_step_expectation_until(self, variances, innovations, *, order=1,
+            pdf=None, cdf=None):
         '''
             Integrate
             ```
@@ -111,6 +112,10 @@ class Garch():
             ```
             from -infty to innovations
         '''
+        if pdf is None:
+            pdf = norm.pdf(innovations)
+        if cdf is None:
+            cdf = norm.cdf(innovations)
         # Compute factors
         if order==0:
             cdf_factor = np.ones_like(variances)
@@ -148,8 +153,6 @@ class Garch():
         limit_cases = np.broadcast_to(limit_cases, pdf_factor.shape)
         pdf_factor[limit_cases] = 0
         # Compute integral
-        cdf = norm.cdf(innovations)
-        pdf = norm.pdf(innovations)
         return cdf_factor*cdf + pdf_factor*pdf
 
     @instance_returns_numpy_or_scalar(output_type=bool)
