@@ -4,27 +4,10 @@ import collections
 import numpy as np
 import scipy.optimize
 from scipy.stats import norm
-import time
 MAX_VAR_QUANT_TRY = 5
 
 Quantization = collections.namedtuple('Quantization',
         ['values', 'probabilities', 'transition_probabilities'])
-def timethis(number = 1):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-           start = time.perf_counter()
-           t = np.empty(number)
-           for i in range(number):
-               r = func(*args, **kwargs)
-               t[i] = time.perf_counter() - start
-           print('{}.{} : {} sec'.format(
-               func.__module__,
-               func.__name__,
-               t.mean()))
-           return r
-        return wrapper
-    return decorator
 
 def get_voronoi(grid, lb=-np.inf, ub=np.inf):
     voronoi = np.empty(grid.size+1)
