@@ -5,7 +5,7 @@ import numpy as np
 import scipy.integrate as integrate
 from scipy.stats import norm
 
-import pymaat.testing
+from pymaat.testing import * 
 import pymaat.garch
 
 VAR_LEVEL = 0.18**2./252.
