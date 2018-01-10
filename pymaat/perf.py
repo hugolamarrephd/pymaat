@@ -19,9 +19,9 @@ def timethis(number=1):
 
 @contextmanager
 def timeblock(label):
-      start = time.perf_counter()
-      try:
-          yield
-      finally:
-          end = time.perf_counter()
-          print('{} : {} sec'.format(label, end-start))
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        end = time.perf_counter()
+        print('{} : {} sec'.format(label, end-start))

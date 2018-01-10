@@ -9,128 +9,8 @@ MAX_VAR_QUANT_TRY = 5
 Quantization = collections.namedtuple('Quantization',
         ['values', 'probabilities', 'transition_probabilities'])
 
-def get_voronoi(grid, lb=-np.inf, ub=np.inf):
-    voronoi = np.empty(grid.size+1)
-    voronoi[0] = lb
-    voronoi[1:-1] = grid[:-1] + 0.5*np.diff(grid, n=1)
-    voronoi[-1] = ub
-    return voronoi
-
-class VarianceQuantizer():
-    def __init__(self, model, *, nper=21, nquant=100):
-        self.model = model
-        self.nper = nper
-        self.nquant = nquant
-
-    def quantize(self, first_variance):
-        # Initialize placeholders for results
-        grid, proba, trans = self._initialize(first_variance)
-
-        # Perform marginal variance quantization
-        for t in range(1,self.nper+1):
-            # Initialize state of iteration
-            state = _VarianceQuantizerState(self, grid[t-1], proba[t-1])
-            success, optim_x = self._one_step_quantize(state)
-            if not success: # Early failure if optimizer unsuccesfull
-                raise RuntimeError
-            # Gather results from state...
-            grid[t] = state.get_grid(optim_x)
-            trans[t-1] = state.get_transition_probability(optim_x)
-            proba[t] = state.get_probability(optim_x)
-
-        return Quantization(grid, proba, trans)
-
-    def _initialize(self, first_variance):
-        # Check input
-        first_variance = np.atleast_1d(first_variance)
-        if first_variance.shape != (1,):
-            raise ValueError
-        grid = np.empty((self.nper+1, self.nquant), float)
-        grid[0] = first_variance
-        proba = np.empty_like(grid)
-        proba[0] = 0
-        proba[0,0] = 1
-        trans = np.empty((self.nper, self.nquant, self.nquant), float)
-        return (grid, proba, trans)
-
-    def _one_step_quantize(self, state, init=None, try_=0):
-        if init is None:
-            init = np.zeros(self.nquant)
-
-        # We let the minimization run until the predicted reduction
-        #   in distortion hits zero (or less) by setting gtol=0 and
-        #   maxiter=inf. We hence expect a status flag of 2.
-        sol = scipy.optimize.minimize(
-                lambda x: state.get_distortion(x),
-                init,
-                method='trust-ncg',
-                jac=lambda x: state.get_gradient(x),
-                hess=lambda x: state.get_hessian(x),
-                options={'disp':False, 'maxiter':np.inf, 'gtol':0})
-
-        success = sol.status==2 or sol.status==0
-
-        # Catch stall gradient areas
-        if try_<MAX_VAR_QUANT_TRY and np.any(sol.jac == 0.):
-            #Re-initialize components having stall gradients
-            reinit_x = sol.x.copy()
-            reinit_x[sol.jac == 0.] = 0.
-            success, sol.x = self._one_step_quantize(state,
-                    init=reinit_x,
-                    try_=try_+1)
-
-        # Format output
-        return success, sol.x
-
-
-class _VarianceQuantizerState():
-
-    # Private class used by VarianceQuantizer
-
-    def __init__(self, quant, prev_grid, prev_proba):
-        self.nquant = quant.nquant
-        self.model = quant.model
-        self.prev_grid = prev_grid
-        self.prev_proba = prev_proba
-        self.h_min = self.model.omega + self.model.beta*self.prev_grid[0]
-        self.__cache = {}
-        assert (self.prev_grid.ndim == 1
-                and self.prev_grid.shape == (self.nquant,))
-        assert (self.prev_proba.ndim == 1
-                and prev_proba.shape == (self.nquant,))
-
-    def eval_at(self, x):
-        # Caching mechanism
-        x.flags.writeable = False
-        h = hash(x.tobytes())
-        if h in self.__cache:
-            assert np.all(x==self.__cache[h].x)
-            return self.__cache[h]
-        else:
-            a_new_eval =  _VarianceQuantizerEval(self, x)
-            self.__cache[h] = a_new_eval
-            return a_new_eval
-
-    def get_distortion(self, x):
-        return self.eval_at(x).distortion
-
-    def get_gradient(self, x):
-        return self.eval_at(x).transformed_gradient
-
-    def get_hessian(self, x):
-        return self.eval_at(x).transformed_hessian
-
-    def get_transition_probability(self, x):
-        return self.eval_at(x).transition_probability
-
-    def get_probability(self, x):
-        return self.eval_at(x).probability
-
-    def get_grid(self, x):
-        return self.eval_at(x).grid
-
+#TODO: move to utilities
 class lazyproperty:
-    #TODO: move to utilities
     def __init__(self, func):
         self.func = func
 
@@ -143,21 +23,132 @@ class lazyproperty:
             setattr(instance, self.func.__name__, value)
             return value
 
-class _VarianceQuantizerEval():
+def quantize(self, model, first_variance, first_price=1., *,
+        nper=21, nvar=100, nprice=100):
+    pass
 
-    # Private class used by _VarianceQuantizerState
+def quantize_variance(model, first_variance, *, nper=21, nquant=100):
+    # Performs marginal variance quantization *only* and returns result
+    # as a named-tuple containing values, probabilities and transition
+    # probabilities.
 
-    def __init__(self, state, x):
-        self.state = state
+    # Initialize placeholders for results
+    grid = np.empty((nper+1, nquant)) #(t,i)
+    proba = np.empty_like(grid) #(t,i)
+    trans = np.empty((nper, nquant, nquant)) #(t,i,j)
+
+    # Initialize first state
+    state = _FirstVarianceQuantizerState(nquant, first_variance)
+
+    for t in range(nper+1):
+        # Gather results from previous state...
+        grid[t] = state.grid
+        proba[t] = state.probability
+        if t>0:
+            trans[t-1] = state.transition_probability
+        # Advance to next time step (computations done here...)
+        state = _OneStepVarianceQuantizer(model, nquant, state).advance()
+
+    # Return "Quantization" named-tuple
+    return Quantization(grid, proba, trans)
+
+def get_voronoi(grid, lb=-np.inf, ub=np.inf):
+    voronoi = np.empty(grid.size+1)
+    voronoi[0] = lb
+    voronoi[1:-1] = grid[:-1] + 0.5*np.diff(grid, n=1)
+    voronoi[-1] = ub
+    return voronoi
+
+# Variance Quantizer Internals
+
+class _OneStepVarianceQuantizer():
+
+    def __init__(self, model, nquant, prev_state):
+        self.model = model
+        self.nquant = nquant
+        self.prev_state = prev_state
+        # Initialize Cache
+        self.__cache = {}
+
+    def advance(self):
+        success, optim_x = self._do_optimization()
+        if not success: # Early failure if optimizer unsuccessful
+            raise RuntimeError
+        return self.eval_at(optim_x)
+
+    def _do_optimization(self, init=None, try_number=0):
+        if init is None:
+            init = np.zeros(self.nquant)
+
+        # We let the minimization run until the predicted reduction
+        #   in distortion hits zero (or less) by setting gtol=0 and
+        #   maxiter=inf. We hence expect a status flag of 2.
+        sol = scipy.optimize.minimize(
+                lambda x: self.eval_at(x).distortion,
+                init,
+                method='trust-ncg',
+                jac=lambda x: self.eval_at(x).transformed_gradient,
+                hess=lambda x: self.eval_at(x).transformed_hessian,
+                options={'disp':False, 'maxiter':np.inf, 'gtol':0.})
+
+        success = sol.status==2 or sol.status==0
+
+        # Catch stall gradient areas
+        if try_number<MAX_VAR_QUANT_TRY and np.any(sol.jac == 0.):
+            #Re-initialize components having stall gradients
+            reinit_x = sol.x.copy()
+            reinit_x[sol.jac == 0.] = 0.
+            success, sol.x = self._do_optimization(
+                    init=reinit_x, try_number=try_number+1)
+
+        # Format output
+        return success, sol.x
+
+    def eval_at(self, x):
+        # Caching mechanism
+        x.flags.writeable = False
+        h = hash(x.tobytes())
+        if h in self.__cache:
+            assert np.all(x==self.__cache[h].x)
+            return self.__cache[h]
+        else:
+            a_new_state =  _VarianceQuantizerState(
+                    self.model, self.nquant, self.prev_state, x)
+            self.__cache[h] = a_new_state
+            return a_new_state
+
+class _FirstVarianceQuantizerState():
+
+    def __init__(self, nquant, first_variance):
+        # Check input
+        first_variance = np.atleast_1d(first_variance)
+        if first_variance.shape != (1,):
+            raise ValueError
+        # Initialize
+        self.grid = np.full((nquant), first_variance)
+        self.probability = np.zeros_like(self.grid)
+        self.probability[0] = 1.
+
+class _VarianceQuantizerState():
+
+    def __init__(self, model, nquant, prev_state, x):
+        self.model = model
+        self.nquant = nquant
+        self.prev_state = prev_state
         self.x = x
-        assert self.x.ndim == 1 and self.x.shape == (self.state.nquant,)
+        assert self.x.ndim == 1 and self.x.shape == (self.nquant,)
+
+    @lazyproperty
+    def h_min(self):
+        # TODO generalize h_min to all GARCH models
+        return self.model.omega + self.model.beta*self.prev_state.grid[0]
 
     @lazyproperty
     def distortion(self):
         out = np.sum(self.integrals[2]
                 - 2.*self.integrals[1]*self._grid
                 + self.integrals[0]*self._grid**2., axis=1)
-        out = self.state.prev_proba.dot(out)
+        out = self.prev_state.probability.dot(out)
         assert not np.isnan(out)
         return out
 
@@ -182,13 +173,13 @@ class _VarianceQuantizerEval():
 
     @lazyproperty
     def probability(self):
-        out = self.state.prev_proba.dot(self.transition_probability)
+        out = self.prev_state.probability.dot(self.transition_probability)
         assert not np.any(np.isnan(out))
         return out
 
     @lazyproperty
     def grid(self):
-        out = self.state.h_min + np.cumsum(self.all_exp_x)
+        out = self.h_min + np.cumsum(self.all_exp_x)
         assert np.all(np.isfinite(out))
         assert np.all(out>0)
         assert np.all(np.diff(out)>0)
@@ -198,33 +189,33 @@ class _VarianceQuantizerEval():
     def voronoi(self):
         out = get_voronoi(self.grid, lb=0.)
         assert out[0] == 0.
-        assert out[1]>=self.state.h_min
+        assert out[1]>=self.h_min
         return out
 
     @lazyproperty
     def roots(self):
-        out = self.state.model.one_step_roots(self._prev_grid, self._voronoi)
+        out = self.model.one_step_roots(self._prev_grid, self._voronoi)
         return out
 
     @lazyproperty
     def gradient(self):
-        out = -2. * self.state.prev_proba.dot(
+        out = -2. * self.prev_state.probability.dot(
                 self.integrals[1]-self.integrals[0]*self._grid)
         assert not np.any(np.isnan(out))
         return out
 
     @lazyproperty
     def hessian(self):
-        diagonal = -2. * self.state.prev_proba.dot(
+        diagonal = -2. * self.prev_state.probability.dot(
                 self.integral_derivatives[0][1]
                 -self.integral_derivatives[0][0]*self._grid
                 -self.integrals[0])
-        off_diagonal = -2. * self.state.prev_proba.dot(
+        off_diagonal = -2. * self.prev_state.probability.dot(
                 self.integral_derivatives[1][1]
                 -self.integral_derivatives[1][0]*self._grid)
         # Build hessian
-        out = np.zeros((self.state.nquant, self.state.nquant))
-        for j in range(self.state.nquant):
+        out = np.zeros((self.nquant, self.nquant))
+        for j in range(self.nquant):
             out[j,j] = diagonal[j]
             if j>0:
                 out[j-1,j] = off_diagonal[j]
@@ -245,7 +236,7 @@ class _VarianceQuantizerEval():
         return [norm.cdf(self.roots[i]) for i in range(2)]
 
     def _get_integral(self, *, order):
-        integral_func = self.state.model.one_step_expectation_until
+        integral_func = self.model.one_step_expectation_until
         integral = [integral_func(self._prev_grid, self.roots[i],
                 order=order, pdf=self.pdf[i], cdf=self.cdf[i])
                 for i in range(2)]
@@ -264,7 +255,7 @@ class _VarianceQuantizerEval():
         return dI, dI_lagged
 
     def _get_factor_for_integral_derivative(self):
-        derivative_func = self.state.model.one_step_roots_unsigned_derivative
+        derivative_func = self.model.one_step_roots_unsigned_derivative
         root_derivative = derivative_func(self._prev_grid, self._voronoi)
         factor = (0.5 * root_derivative
                 * (self.pdf[0]+self.pdf[1]))
@@ -293,20 +284,20 @@ class _VarianceQuantizerEval():
 
     @lazyproperty
     def all_exp_x(self):
-        return np.exp(self.x)*self.state.h_min/self.state.nquant
+        return np.exp(self.x)*self.h_min/self.nquant
 
     @lazyproperty
     def jacobian(self):
-        mask = np.tril(np.ones((self.state.nquant, self.state.nquant)))
+        mask = np.tril(np.ones((self.nquant, self.nquant)))
         out = self.all_exp_x[np.newaxis,:]*mask
         assert not np.any(np.isnan(out))
         return out
 
     @lazyproperty
     def hessian_correction(self):
-        out = np.zeros((self.state.nquant,self.state.nquant))
-        mask = np.empty(self.state.nquant)
-        for i in range(self.state.nquant):
+        out = np.zeros((self.nquant,self.nquant))
+        mask = np.empty(self.nquant)
+        for i in range(self.nquant):
             mask[:] = 0.
             mask[:i+1] = 1.
             out += self.gradient[i]*np.diag(mask*self.all_exp_x)
@@ -314,10 +305,9 @@ class _VarianceQuantizerEval():
         return out
 
     # Broadcast-ready formatting
-
     @lazyproperty
     def _prev_grid(self):
-        return self.state.prev_grid[:,np.newaxis] #nquant-by-1
+        return self.prev_state.grid[:,np.newaxis] #nquant-by-1
 
     @lazyproperty
     def _grid(self):
@@ -325,4 +315,15 @@ class _VarianceQuantizerEval():
 
     @lazyproperty
     def _voronoi(self):
-        return self.voronoi[np.newaxis,:]
+        return self.voronoi[np.newaxis,:] #1-by-nquant
+
+# Price Quantizer Internals
+
+class _OneStepPriceQuantizer():
+    pass
+
+class _FirstPriceQuantizerState():
+    pass
+
+class _PriceQuantizerState():
+    pass
