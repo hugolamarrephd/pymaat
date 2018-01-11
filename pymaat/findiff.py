@@ -8,13 +8,6 @@ SPACE = np.power(np.finfo(float).eps, 1/3)
 Optimal delta(x) spacing for central difference method
 '''
 
-def _get_dx(x):
-    x = np.atleast_1d(x)
-    dx = np.nanmin(np.abs(x)*SPACE)
-    if dx == 0.:
-        raise ValueError("At least one x must be non-zero")
-    return dx
-
 def derivative_at(func, x, *, mode='central'):
     dx = _get_dx(x)
     if mode=='central':
@@ -24,8 +17,15 @@ def derivative_at(func, x, *, mode='central'):
     elif mode=='backward':
         return (func(x) - func(x-dx))/dx
 
+def _get_dx(x):
+    x = np.atleast_1d(x)
+    dx = np.nanmin(np.abs(x)*SPACE)
+    if np.all(dx == 0.):
+        raise ValueError("At least one x must be non-zero")
+    return dx
 
 def gradient_at(func, x, *, mode='central'):
+    x = np.atleast_1d(x)
     assert np.atleast_1d(func(x)).size==1
     grad = np.empty_like(x)
     for (i,x_) in enumerate(x):
@@ -50,6 +50,7 @@ def jacobian_at(func, x, *, mode='central'):
 
 def hessian_at(func, x, mode='central'):
     n = np.atleast_1d(x).size
+    x = np.atleast_1d(x)
     hess = np.empty((n,n))
     for (i,x_) in enumerate(x):
         def grad_i(x_scalar):

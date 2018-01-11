@@ -157,9 +157,10 @@ class Garch():
 
     @instance_returns_numpy_or_scalar(output_type=bool)
     def one_step_has_roots(self,variances, next_variances):
-        return next_variances<=self._get_lowest_one_step_variance(variances)
+        return next_variances<=self.get_lowest_one_step_variance(variances)
 
-    def _get_lowest_one_step_variance(self, variances):
+    @instance_returns_numpy_or_scalar(output_type=float)
+    def get_lowest_one_step_variance(self, variances):
         return self.omega + self.beta*variances
 
     # TODO: Send to estimator

@@ -85,11 +85,10 @@ $ git branch -d your-feature-branch
 ```
 
 ## Tests
-* Grant execution permission:
-    `$ chmod +x tests/run.py`
-* Run tests from command line:
-    `$ tests/run.py`
-
+* Run all tests from command line:
+    `$ py.test`
+* Run unit-tests only:
+    `$ py.test unit_test`
 
 ## Coding and Style
 

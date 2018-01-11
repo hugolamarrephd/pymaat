@@ -52,7 +52,7 @@ def quantize_variance(model, first_variance, *, nper=21, nquant=100):
     # Return "Quantization" named-tuple
     return Quantization(grid, proba, trans)
 
-def get_voronoi(grid, lb=-np.inf, ub=np.inf):
+def get_voronoi_1d(grid, lb=-np.inf, ub=np.inf):
     voronoi = np.empty(grid.size+1)
     voronoi[0] = lb
     voronoi[1:-1] = grid[:-1] + 0.5*np.diff(grid, n=1)
@@ -140,8 +140,8 @@ class _VarianceQuantizerState():
 
     @lazyproperty
     def h_min(self):
-        # TODO generalize h_min to all GARCH models
-        return self.model.omega + self.model.beta*self.prev_state.grid[0]
+        return self.model.get_lowest_one_step_variance(
+                self.prev_state.grid[0])
 
     @lazyproperty
     def distortion(self):
@@ -187,7 +187,7 @@ class _VarianceQuantizerState():
 
     @lazyproperty
     def voronoi(self):
-        out = get_voronoi(self.grid, lb=0.)
+        out = get_voronoi_1d(self.grid, lb=0.)
         assert out[0] == 0.
         assert out[1]>=self.h_min
         return out

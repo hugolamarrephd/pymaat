@@ -1,103 +1,205 @@
 import numpy as np
+import pytest
 
-import pymaat.testing
+from pymaat.testing import *
 
-class TestBasicAssertions(pymaat.testing.TestCase):
-    pass
-    # def test_assertEqual_supports_builtin(self):
-    #     self.fail()
+class TestBasicAssertions:
 
-    # def test_assertEqual_supports_np_array(self):
-    #     self.fail()
+    # Assert equal
+    def test_assert_equal_when_equal_scalars(self):
+        assert_equal(1., 1.)
 
-    # def test_assertAlmostEqual_supports_builtin(self):
-    #     self.fail()
+    def test_assert_equal_when_equal_arrays(self):
+        an_array = np.zeros((1,2))
+        another_array = np.array([[0.,0.]])
+        assert_equal(an_array, another_array)
 
-    # def test_assertAlmostEqual_supports_np_array(self):
-    #     self.fail()
+    def test_assert_equal_when_equal_mixed(self):
+        an_array = np.zeros((1,2))
+        assert_equal(an_array, 0.)
+        assert_equal(0, an_array)
 
-class TestDerivativesAssertions(pymaat.testing.TestCase):
+    def test_assert_equal_when_not_equal_scalars(self):
+        with pytest.raises(AssertionError):
+            assert_equal(1.,2.)
 
-    test_scalar_arg = np.array([1.02, -2.52, 4.78 ])
-    test_multi_arg = np.array([4.23, 9.04, 8.34, 1.02])
+    def test_assert_equal_when_not_equal_arrays(self):
+        an_array = np.zeros((1,2))
+        another_array = np.array([[0.,1.]])
+        with pytest.raises(AssertionError):
+            assert_equal(an_array, another_array)
 
-    def scalar_to_scalar_func(self, x):
-       return np.power(x, 2.)
+    def test_assert_equal_when_not_equal_mixed(self):
+        an_array = np.zeros((1,2))
+        an_array[0,1] = 1.
+        with pytest.raises(AssertionError):
+            assert_equal(an_array, 0.)
 
-    def scalar_to_scalar_der(self, x):
-       return 2.*x
+    def test_assert_equal_when_size_mismatch(self):
+        an_array = np.zeros((1,2))
+        another_array = np.zeros((2))
+        with pytest.raises(AssertionError):
+            assert_equal(an_array, another_array)
 
-    def multi_to_scalar_func(self, x):
-        return x[0]**2. + x[1]**3. + x[2]**4. + x[3]**5.
+    # Assert almost equal
+    def test_assert_almost_equal_when_equal_scalars(self):
+        assert_almost_equal(1.0000000001, 1.)
 
-    def multi_to_scalar_grad(self, x):
-        return np.array([2.*x[0], 3.*x[1]**2., 4.*x[2]**3., 5.*x[3]**4.])
+    def test_assert_almost_equal_when_equal_arrays(self):
+        an_array = np.ones((1,2))
+        another_array = np.array([[1.,1.]]) + 0.000000000001
+        assert_almost_equal(an_array, another_array)
 
-    def multi_to_multi_func(self, x):
-        return np.array([x[0]**2. + x[1]**3. + x[2]**4. + x[3]**5.,
-            6.*x[2] + x[3]**3.,
-            x[0]*x[2]**2 + x[1]*x[3]**0.5,
-            x[0]*x[1]*x[2]*x[3]])
+    def test_assert_almost_equal_when_equal_mixed(self):
+        an_array = np.ones((1,2))
+        assert_almost_equal(an_array, 1.000000000001)
+        assert_almost_equal(1.000000000001, an_array)
 
-    def multi_to_multi_jac(self, x):
-        return np.array([
-            [2.*x[0], 3.*x[1]**2., 4.*x[2]**3., 5.*x[3]**4],
-            [0., 0., 6., 3.*x[3]**2.],
-            [x[2]**2., x[3]**0.5, 2.*x[0]*x[2], x[1]/(2.*x[3]**0.5)],
-            [x[1]*x[2]*x[3], x[0]*x[2]*x[3], x[0]*x[1]*x[3], x[0]*x[1]*x[2]]
-            ])
+    def test_assert_almost_equal_when_not_equal_scalars(self):
+        with pytest.raises(AssertionError):
+            assert_almost_equal(1.,2.)
 
-    def test_assert_good_derivative(self):
+    def test_assert_almost_equal_when_not_equal_arrays(self):
+        an_array = np.zeros((1,2))
+        another_array = np.array([[0.,1.]])
+        with pytest.raises(AssertionError):
+            assert_almost_equal(an_array, another_array)
+
+    def test_assert_almost_equal_when_not_equal_mixed(self):
+        an_array = np.zeros((1,2))
+        an_array[0,1] = 1.
+        with pytest.raises(AssertionError):
+            assert_almost_equal(an_array, 0.)
+            assert_almost_equal(0., an_array)
+
+    def test_assert_almost_equal_when_size_mismatch(self):
+        an_array = np.zeros((1,2))
+        another_array = np.zeros((2))
+        with pytest.raises(AssertionError):
+            assert_almost_equal(an_array, another_array)
+
+    # Assert True
+    def test_assert_true_when_true_scalars(self):
+        assert_true(True)
+
+    def test_assert_true_when_true_arrays(self):
+        an_array = np.full((1,2), True, dtype=bool)
+        assert_true(an_array)
+
+    def test_assert_true_when_not_true_scalars(self):
+        with pytest.raises(AssertionError):
+            assert_true(False)
+
+    def test_assert_true_when_not_true_arrays(self):
+        an_array = np.array([False, True])
+        with pytest.raises(AssertionError):
+            assert_true(an_array)
+
+    # Assert False
+    def test_assert_false_when_false_scalars(self):
+        assert_false(False)
+
+    def test_assert_false_when_false_arrays(self):
+        an_array = np.full((1,2), False, dtype=bool)
+        assert_false(an_array)
+
+    def test_assert_false_when_not_false_scalars(self):
+        with pytest.raises(AssertionError):
+            assert_false(True)
+
+    def test_assert_false_when_not_false_arrays(self):
+        an_array = np.array([False, True])
+        with pytest.raises(AssertionError):
+            assert_false(an_array)
+
+class TestFiniteDifferenceAssertions:
+
+    # Derivative assertion
+    def test_assert_good_callable_derivative(self):
         # Does not raise AssertionError
-        self.assert_derivative_at(
-                self.scalar_to_scalar_der,
-                self.scalar_to_scalar_func,
-                self.test_scalar_arg,
-                rtol=1e-6, atol=1e-6)
+        assert_derivative_at(lambda x: 2.*x, lambda x: x**2., 1.02)
 
-    def test_assert_bad_derivative(self):
-        with self.assertRaises(AssertionError):
-            self.assert_derivative_at(
-                    lambda x: x+2,
-                    self.scalar_to_scalar_func,
-                    self.test_scalar_arg,
-                    rtol=1e-6, atol=1e-6)
-
-    def test_assert_good_gradient(self):
+    def test_assert_good_derivative_value(self):
         # Does not raise AssertionError
-        self.assert_gradient_at(
-                self.multi_to_scalar_grad,
-                self.multi_to_scalar_func,
-                self.test_multi_arg,
-                rtol=1e-6, atol=1e-6)
+        assert_derivative_at(2.04, lambda x: x**2., 1.02)
 
-    def test_assert_bad_gradient(self):
-        bad_grad = lambda x: np.array([2., x[3], x[2]**2., x[3]+4.])
-        with self.assertRaises(AssertionError):
-            self.assert_gradient_at(
-                    bad_grad,
-                    self.multi_to_scalar_func,
-                    self.test_multi_arg,
-                    rtol=1e-6, atol=1e-6)
+    def test_assert_bad_callable_derivative(self):
+        with pytest.raises(AssertionError):
+            assert_derivative_at(lambda x: x+2., lambda x: x**2., 1.02)
 
-    def test_assert_good_jacobian(self):
+    def test_assert_bad_derivative_value(self):
+        with pytest.raises(AssertionError):
+            assert_derivative_at(32.12, lambda x: x**2., 1.02)
+
+    # Gradient assertion
+    def test_assert_good_callable_gradient(self):
         # Does not raise AssertionError
-        self.assert_jacobian_at(
-                self.multi_to_multi_jac,
-                self.multi_to_multi_func,
-                self.test_multi_arg,
-                rtol=1e-6, atol=1e-6)
+        assert_gradient_at(lambda x: 2.*x, lambda x: x**2., 1.02)
 
-    def test_assert_bad_jacobian(self):
-        bad_jac = lambda x: np.array([
-            [2., x[3], x[2]**2., x[3]+4.],
-            [2., x[3], x[2]**2., x[3]+4.],
-            [2., x[3], x[2]**2., x[3]+4.],
-            [2., x[3], x[2]**2., x[3]+4.],
-            ])
-        with self.assertRaises(AssertionError):
-            self.assert_jacobian_at(
-                    bad_jac,
-                    self.multi_to_multi_func,
-                    self.test_multi_arg,
-                    rtol=1e-6, atol=1e-6)
+    def test_assert_good_gradient_value(self):
+        # Does not raise AssertionError
+        assert_gradient_at(2.04, lambda x: x**2., 1.02)
+
+    def test_assert_bad_callable_gradient(self):
+        with pytest.raises(AssertionError):
+            assert_gradient_at(lambda x: x+2., lambda x: x**2., 1.02)
+
+    def test_assert_bad_gradient_value(self):
+        with pytest.raises(AssertionError):
+            assert_gradient_at(32.12, lambda x: x**2., 1.02)
+
+    # Jacobian assertion
+    def test_assert_good_callable_jacobian(self):
+        # Does not raise AssertionError
+        assert_jacobian_at(lambda x: 2.*x, lambda x: x**2., 1.02)
+
+    def test_assert_good_jacobian_value(self):
+        # Does not raise AssertionError
+        assert_jacobian_at(2.04, lambda x: x**2., 1.02)
+
+    def test_assert_bad_callable_jacobian(self):
+        with pytest.raises(AssertionError):
+            assert_jacobian_at(lambda x: x+2., lambda x: x**2., 1.02)
+
+    def test_assert_bad_jacobian_value(self):
+        with pytest.raises(AssertionError):
+            assert_jacobian_at(32.12, lambda x: x**2., 1.02)
+
+    # Hessian assertion
+    def test_assert_good_callable_hessian(self):
+        # Does not raise AssertionError
+        assert_hessian_at(lambda x: 2., lambda x: x**2., 1.02)
+
+    def test_assert_good_hessian_value(self):
+        # Does not raise AssertionError
+        assert_hessian_at(2., lambda x: x**2., 1.02)
+
+    def test_assert_bad_callable_hessian(self):
+        with pytest.raises(AssertionError):
+            assert_hessian_at(lambda x: x+2., lambda x: x**2., 1.02)
+
+    def test_assert_bad_hessian_value(self):
+        with pytest.raises(AssertionError):
+            assert_hessian_at(32.12, lambda x: x**2., 1.02)
+
+class TestIntegralAssertions:
+
+    def test_assert_integral_until_good_scalar(self):
+        # Does not raise AssertionError
+        assert_integral_until(lambda x: np.exp(2.*x)/2.,
+            lambda x: np.exp(2.*x), 0.)
+
+    def test_assert_integral_until_good_array(self):
+        # Does not raise AssertionError
+        assert_integral_until(lambda x: np.exp(2.*x)/2.,
+            lambda x: np.exp(2.*x), np.array([-1.,0.,1.]))
+
+    def test_assert_integral_until_bad_scalar(self):
+        with pytest.raises(AssertionError):
+            assert_integral_until(lambda x: np.exp(2.*x),
+                lambda x: np.exp(2.*x), 0.)
+
+    def test_assert_integral_until_bad_array(self):
+        with pytest.raises(AssertionError):
+            assert_integral_until(lambda x: np.exp(2.*x),
+                lambda x: np.exp(2.*x), np.array([-1.,0.,1.]))
