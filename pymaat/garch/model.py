@@ -34,6 +34,9 @@ def instance_returns_numpy_or_scalar(output_type):
     return decorator
 
 class Garch():
+    #TODO decouple garch equation from return equation
+    #TODO AbstractGarch
+
     def __init__(self, mu, omega, alpha, beta, gamma):
         self.mu = mu
         self.omega = omega
@@ -48,6 +51,19 @@ class Garch():
         #         + alpha*(z_t-gamma*sqrt(h_{t}))^2
         return (self.omega + self.beta*variances
                 + self.alpha*np.power(innovations-self.gamma*volatilities,2))
+
+    #TODO _one_step_root returns a,d (discrimant) => a+-d
+
+    def _one_step_return_equation(self, innovations, variances, volatilities):
+        # r_t = (mu - 0.5)*h_{t} + sqrt(h_{t}) * z_{t}
+        returns = (self.mu-0.5)*variances + volatilities*innovations
+        return returns
+
+    def _one_step_return_root(self, returns, variances, volatilities):
+        innovations = (returns-(self.mu-0.5)*variances)/volatilities
+        return innovations
+
+    # TODO: ABSTRACT from now on
 
     def timeseries_filter(self, returns, first_variances):
         self._raise_value_error_if_any_invalid_variance(first_variances)
@@ -80,7 +96,8 @@ class Garch():
     @instance_returns_numpy_or_scalar(output_type=(float,float))
     def one_step_generate(self, innovations, variances):
         volatilities = np.sqrt(variances)
-        returns = (self.mu-0.5)*variances + volatilities*innovations
+        returns = self._one_step_return_equation(innovations,
+                variances, volatilities)
         next_variances = self._one_step_equation(innovations,
                 variances, volatilities)
         return (next_variances,returns)
@@ -93,6 +110,12 @@ class Garch():
         innov_left = a-d
         innov_right = a+d
         return (innov_left, innov_right)
+
+    @instance_returns_numpy_or_scalar(output_type=float)
+    def one_step_root_from_return(self, returns, variances):
+        volatilities = np.sqrt(variances)
+        roots = self._one_step_return_root(returns, variances, volatilities)
+        return roots
 
     @instance_returns_numpy_or_scalar(output_type=(float,float))
     def one_step_roots_unsigned_derivative(self, variances, next_variances):

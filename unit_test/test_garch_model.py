@@ -23,6 +23,7 @@ ALL_ONE_STEPS = [
                 'one_step_generate',
                 'one_step_has_roots',
                 'one_step_roots',
+                'one_step_root_from_return',
                 'one_step_roots_unsigned_derivative',
                 'one_step_expectation_until'
                 ]
@@ -331,6 +332,15 @@ class TestOneStep():
         der = model.one_step_roots_unsigned_derivative(
                 self._variances, 0)
         pt.assert_equal(der, np.nan)
+
+    def test_root_from_return(self, model):
+        price = 100.
+        next_prices = np.array([95.,100.,105.])
+        returns = np.log(next_prices/price)
+        z = model.one_step_root_from_return(returns, VAR_LEVEL)
+        _, returns_solved = model.one_step_generate(z, VAR_LEVEL)
+        pt.assert_almost_equal(returns_solved, returns,
+                msg='Invalid root from price.')
 
     # One-step variance integration
     _test_expectation_values = np.array(

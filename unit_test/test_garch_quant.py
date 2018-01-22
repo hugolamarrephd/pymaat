@@ -20,7 +20,8 @@ MODEL = pymaat.garch.Garch(
 NVAR = 4
 FIRST_VARIANCE = 1e-4
 
-class dotdict(dict):
+# Move to semantic utils
+class simple_dot_dict(dict):
     __getattr__ = dict.get
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
@@ -39,24 +40,44 @@ class TestVoronoi1D:
         v = pymaat.garch.quant.get_voronoi_1d(np.array([-3.,-2.,-1.]), ub=0.)
         pt.assert_almost_equal(v, np.array([-np.inf,-2.5,-1.5,0.]))
 
+    def test_voronoi_for_matrices_columns(self):
+        a_matrix = np.array([[1.,3.],[2.,4.]])
+        v = pymaat.garch.quant.get_voronoi_1d(a_matrix, axis=0)
+        expected = np.array([[-np.inf,-np.inf],
+                [1.5, 3.5],
+                [np.inf, np.inf]])
+        pt.assert_almost_equal(v, expected)
+        pt.assert_equal(a_matrix, [[1.,3.],[2.,4.]])
+
+    def test_voronoi_for_matrices_rows(self):
+        a_matrix = np.array([[1.,2.],[3.,4.]])
+        v = pymaat.garch.quant.get_voronoi_1d(a_matrix, axis=1)
+        expected = np.array([[-np.inf, 1.5, np.inf],
+                [-np.inf, 3.5, np.inf]])
+        pt.assert_almost_equal(v, expected)
+        pt.assert_equal(a_matrix, [[1.,2.],[3.,4.]])
+
+        #TODO test for tensors
+        #TODO test when N=1
+
 class TestQuantizerState:
     pass
 
-class TestFirstVarianceQuantizerState:
+class TestOneStepVarianceOptimizer:
+    pass
 
-    first_state = pymaat.garch.quant._FirstVarianceQuantizerState(
-            NVAR, FIRST_VARIANCE)
+class TestFirstVarianceState:
+    pass
 
+class TestVarianceState:
 
-class TestVarianceQuantizerState:
-
-    prev_grid = 0.18**2./252. * np.array([0.55,0.75,1.,1.43])
+    prev_value = 0.18**2./252. * np.array([0.55,0.75,1.,1.43])
     prev_proba = np.array([0.2,0.25,0.45,0.10])
-    prev_state = dotdict({'grid':prev_grid, 'probability':prev_proba})
+    previous = simple_dot_dict({'value':prev_value, 'probability':prev_proba})
 
     x = np.array([ 0.47964318,  -1.07353684,  0.86325162,  0.23725981])
-    state = pymaat.garch.quant._VarianceQuantizerState(MODEL,
-            NVAR, prev_state, x)
+    quantizer = pymaat.garch.quant._MarginalVarianceState(
+            MODEL, NVAR, previous, x)
 
     def get_integrand(self, order=0):
         if order==0:
@@ -69,9 +90,9 @@ class TestVarianceQuantizerState:
             assert False
         return integrand
 
-    def quantized_integral(self, integrand, grid):
+    def quantized_integral(self, integrand, value):
         over = 10 # neglect range outside [-over,over]
-        grid = grid.squeeze()
+        value = value.squeeze()
         def do_integration(bounds, prev_h, h):
             assert prev_h.size==1
             assert h.size==1
@@ -92,11 +113,11 @@ class TestVarianceQuantizerState:
                     points=critical_pts)
             return out[0]
         # Do computations
-        voronoi = pymaat.garch.quant.get_voronoi_1d(grid)
+        voronoi = pymaat.garch.quant.get_voronoi_1d(value)
         I = np.empty((NVAR,NVAR))
-        for (i,prev_h) in enumerate(self.prev_grid):
+        for (i,prev_h) in enumerate(self.prev_value):
             for (j,(lb,ub,h)) in enumerate(
-                    zip(voronoi[:-1], voronoi[1:], grid)):
+                    zip(voronoi[:-1], voronoi[1:], value)):
                 I[i,j] = do_integration((lb,ub), prev_h, h)
         return I
 
@@ -104,32 +125,32 @@ class TestVarianceQuantizerState:
     def test_zeroth_order_integral(self):
         expected_value = self.quantized_integral(
                 self.get_integrand(order=0),
-                self.state.grid)
-        pt.assert_almost_equal(self.state.integrals[0],
+                self.quantizer.value)
+        pt.assert_almost_equal(self.quantizer.integrals[0],
                 expected_value, rtol=1e-6,
                 msg='Incorrect pdf integral (I0)')
 
     def test_first_order_integral(self):
         expected_value = self.quantized_integral(
                 self.get_integrand(order=1),
-                self.state.grid)
-        pt.assert_almost_equal(self.state.integrals[1],
+                self.quantizer.value)
+        pt.assert_almost_equal(self.quantizer.integrals[1],
                 expected_value, rtol=1e-4,
                 msg='Incorrect MODEL integral (I1)')
 
     def test_second_order_integral(self):
         expected_value = self.quantized_integral(
                 self.get_integrand(order=2),
-                self.state.grid)
-        pt.assert_almost_equal(self.state.integrals[2],
+                self.quantizer.value)
+        pt.assert_almost_equal(self.quantizer.integrals[2],
                 expected_value, rtol=1e-3,
                 msg='Incorrect MODEL squared integral (I2)')
 
     def assert_integral_derivative(self, order=0, lag=0):
         if lag==0:
-            dI = self.state.integral_derivatives[0]
+            dI = self.quantizer.integral_derivatives[0]
         elif lag==-1:
-            dI = self.state.integral_derivatives[1]
+            dI = self.quantizer.integral_derivatives[1]
         else:
             assert False
         assert order==0 or order==1
@@ -137,17 +158,17 @@ class TestVarianceQuantizerState:
         for j in range(NVAR-np.abs(lag)):
 
             def func(h):
-                new_grid = self.state.grid.copy()
-                new_grid[j+(lag==1)] = h
+                new_value = self.quantizer.value.copy()
+                new_value[j+(lag==1)] = h
                 I = self.quantized_integral(
                     self.get_integrand(order=order),
-                    new_grid)
+                    new_value)
                 return I[:,j+(lag==-1)]
 
             derivative = dI[order][:,j+(lag==-1)]
 
             pt.assert_derivative_at(derivative, func,
-                    self.state.grid[j+(lag==1)], rtol=1e-3)
+                    self.quantizer.value[j+(lag==1)], rtol=1e-3)
 
     def test_zeroth_order_integral_derivative_lag_m1(self):
         self.assert_integral_derivative(order=0, lag=-1)
@@ -161,39 +182,39 @@ class TestVarianceQuantizerState:
     def test_first_order_integral_derivative_lag_0(self):
         self.assert_integral_derivative(order=1, lag=0)
 
-    def distortion(self, grid):
+    def distortion(self, value):
         distortion = self.quantized_integral(
-                lambda z,H,h: (H-h)**2. * norm.pdf(z), grid)
+                lambda z,H,h: (H-h)**2. * norm.pdf(z), value)
         return self.prev_proba.dot(distortion).sum()
 
     def test_distortion(self):
-        pt.assert_almost_equal(self.state.distortion,
-                self.distortion(self.state.grid),
+        pt.assert_almost_equal(self.quantizer.distortion,
+                self.distortion(self.quantizer.value),
                 msg='Incorrect distortion', rtol=1e-2)
 
     def test_distortion_gradient(self):
-        pt.assert_gradient_at(self.state.gradient, self.distortion,
-                self.state.grid, rtol=1e-2)
+        pt.assert_gradient_at(self.quantizer.gradient, self.distortion,
+                self.quantizer.value, rtol=1e-2)
 
     def test_distortion_hessian(self):
-        pt.assert_hessian_at(self.state.hessian, self.distortion,
-                self.state.grid, rtol=1e-2, atol=1e-2)
+        pt.assert_hessian_at(self.quantizer.hessian, self.distortion,
+                self.quantizer.value, rtol=1e-2, atol=1e-2)
 
     def test_minimal_variance(self):
-        pt.assert_true(self.state.h_min>0.,
+        pt.assert_true(self.quantizer.h_min>0.,
                 msg='minimum variance must be positive')
-        pt.assert_true(self.state.h_min<self.prev_grid[0],
+        pt.assert_true(self.quantizer.h_min<self.prev_value[0],
                 msg='minimum variance is strictly decreasing in time')
 
     def assert_inv_trans_is_in_space_for(self, x):
-        pt.assert_true(np.diff(self.state.grid)>0, msg='is not sorted')
-        # The first grid point could be equal to minimum variance
+        pt.assert_true(np.diff(self.quantizer.value)>0, msg='is not sorted')
+        # The first value point could be equal to minimum variance
         # => test second point ...
-        pt.assert_true(self.state.grid[1]>self.state.h_min)
+        pt.assert_true(self.quantizer.value[1]>self.quantizer.h_min)
         # The first voronoi point must be strictly greater than minimum
         # variance
-        pt.assert_true(0.5*(self.state.grid[0]+self.state.grid[1])
-                >self.state.h_min,
+        pt.assert_true(0.5*(self.quantizer.value[0]+self.quantizer.value[1])
+                >self.quantizer.h_min,
                 msg='First voronoi tile has no area above minimum variance')
 
     def test_inv_trans_is_in_space_at_few_values(self):
@@ -205,42 +226,41 @@ class TestVarianceQuantizerState:
                 np.array([3.234,-6.3123,-5.123,0.542]))
 
     def transform(self, x):
-        state = pymaat.garch.quant._VarianceQuantizerState(MODEL,
-                NVAR, self.prev_state, x)
-        return state.grid
+        quantizer = pymaat.garch.quant._MarginalVarianceState(
+                MODEL, NVAR, self.previous, x)
+        return quantizer.value
 
     def test_trans_jacobian(self):
-        pt.assert_jacobian_at(self.state.jacobian, self.transform,
+        pt.assert_jacobian_at(self.quantizer.jacobian, self.transform,
                 self.x, rtol=1e-6, atol=1e-8)
 
     # Test transformed distortion function
 
     def distortion_from_x(self, x):
-        grid = self.transform(x)
-        distortion = self.distortion(grid)
+        value = self.transform(x)
+        distortion = self.distortion(value)
         return distortion
 
     def test_distortion_from_x_gradient(self):
-        pt.assert_gradient_at(self.state.transformed_gradient,
+        pt.assert_gradient_at(self.quantizer.transformed_gradient,
              self.distortion_from_x, self.x, rtol=1e-2)
 
     def test_distortion_from_x_hessian(self):
-        pt.assert_hessian_at(self.state.transformed_hessian,
+        pt.assert_hessian_at(self.quantizer.transformed_hessian,
                 self.distortion_from_x, self.x, rtol=1e-2)
 
     # Test transition probabilities
 
     def test_trans_proba_size(self):
-        pt.assert_equal(self.state.transition_probability.shape,
-                (NVAR, NVAR))
+        pt.assert_equal(self.quantizer.transition_probability.shape, (NVAR, NVAR))
 
     def test_trans_proba_sum_to_one_and_non_negative(self):
-        trans = self.state.transition_probability
+        trans = self.quantizer.transition_probability
         pt.assert_true(trans>=0)
         pt.assert_almost_equal(np.sum(trans,axis=1),1)
 
     def test_trans_proba(self):
-        value = self.state.transition_probability
+        value = self.quantizer.transition_probability
         expected_value = self.quantized_integral(self.get_integrand(order=0),
-                self.state.grid)
+                self.quantizer.value)
         pt.assert_almost_equal(value, expected_value)
