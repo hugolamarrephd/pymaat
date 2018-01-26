@@ -8,6 +8,8 @@ import numpy as np
 import scipy.optimize
 from scipy.stats import norm
 
+from pymaat.mathutil import voronoi_1d
+
 #TODO: move to semantic utilities
 class lazy_property:
     def __init__(self, func):
@@ -23,18 +25,6 @@ class lazy_property:
             return value
 
 #TODO: move to math utilities
-def get_voronoi_1d(quantizer, axis=0, lb=-np.inf, ub=np.inf):
-    if quantizer.size==0:
-        raise ValueError
-    quantizer = np.swapaxes(quantizer,0,axis)
-    shape = list(quantizer.shape)
-    shape[0] += 1
-    voronoi = np.empty(shape)
-    voronoi[0] = lb
-    voronoi[1:-1] = quantizer[:-1] + 0.5*np.diff(quantizer, n=1, axis=0)
-    voronoi[-1] = ub
-    voronoi = np.swapaxes(voronoi,0,axis)
-    return voronoi
 
 ####################################################
 MAX_VAR_QUANT_TRY = 5
@@ -59,6 +49,14 @@ MarkovChain = collections.namedtuple('MarkovChain',
             'transition_probabilities'])
 
 class AbstractQuantization(ABC):
+
+    """
+    Default quantizer factory. This may be overwritten by subclasses
+    """
+    _QuantizerFactory = collections.namedtuple('Quantizer',
+            ['value',
+            'probability',
+            'transition_probability'])
 
     def __init__(self, model, shape, first_quantizer):
         self.model = model
@@ -91,11 +89,12 @@ class AbstractQuantization(ABC):
     def _one_step_optimize(self, shape, previous_quantizer):
         pass
 
-class ConditionalOnVarianceQuantization(AbstractQuantization):
+class ConditionalOnVariance(AbstractQuantization):
     # Quantizes marginal variance first and then
     # quantizes price *conditional* on the optimal variance quantization
 
-    Quantizer = collections.namedtuple('ConditionalOnVarianceQuantizer',
+    _QuantizerFactory = collections.namedtuple(
+            'ConditionalOnVarianceQuantizer',
             ['price_value',
             'variance_quantizer',
             'probability',
@@ -113,31 +112,32 @@ class ConditionalOnVarianceQuantization(AbstractQuantization):
                 first_price,
                 first_probability)
 
-        super(ConditionalOnVarianceQuantization, self).__init__(
+        super(ConditionalOnVariance, self).__init__(
                model, shape, first_quantizer)
 
     def get_markov_chain(self):
-        # TODO: optimize memory
-        sizes = []; values = []; probabilities=[]; transition_probabilities=[]
-        for q in self.all_quantizers:
-            # Sizes
-            sizes.append(q.price_value.size)
-            # Values
-            tmp_value = np.empty(q.price_value.shape,
-                    dtype=[('price',np.float_),('variance',np.float_)])
-            tmp_value['price'] = q.price_value
-            tmp_value['variance'] = q.variance_quantizer.value[:,np.newaxis]
-            values.append(tmp_value.flatten())
-            # Probabilities
-            probabilities.append(q.probability.flatten())
-            # Transition probabilities
-            tmp_trans_proba = np.reshape(q.transition_probability,
-                    (sizes[-2], sizes[-1])) #TODO: Double check this line
-            transition_probabilities.append(tmp_trans_proba)
+        pass
+        # # TODO: optimize memory
+        # sizes = []; values = []; probabilities=[]; transition_probabilities=[]
+        # for q in self.all_quantizers:
+        #     # Sizes
+        #     sizes.append(q.price_value.size)
+        #     # Values
+        #     tmp_value = np.empty(q.price_value.shape,
+        #             dtype=[('price',np.float_),('variance',np.float_)])
+        #     tmp_value['price'] = q.price_value
+        #     tmp_value['variance'] = q.variance_quantizer.value[:,np.newaxis]
+        #     values.append(tmp_value.flatten())
+        #     # Probabilities
+        #     probabilities.append(q.probability.flatten())
+        #     # Transition probabilities
+        #     tmp_trans_proba = np.reshape(q.transition_probability,
+        #             (sizes[-2], sizes[-1])) #TODO: Double check this line
+        #     transition_probabilities.append(tmp_trans_proba)
 
-        return MarkovChain(nper=len(q), ndim=2, sizes=sizes, values=values,
-                probabilities=probabilities,
-                transition_probabilities=transition_probabilities)
+        # return MarkovChain(nper=len(q), ndim=2, sizes=sizes, values=values,
+        #         probabilities=probabilities,
+        #         transition_probabilities=transition_probabilities)
 
     def quantize(self, t, values):
         pass
@@ -178,7 +178,7 @@ class ConditionalOnVarianceQuantization(AbstractQuantization):
                 variance,
                 variance_probability)
 
-        return ConditionalOnVariance.Quantizer(
+        return ConditionalOnVariance._QuantizerFactory(
                 price_value=price_value,
                 variance_quantizer=variance_quantizer,
                 probability=probability,
@@ -201,7 +201,11 @@ class ConditionalOnVarianceQuantization(AbstractQuantization):
         all_price_states = [None]*variance_size
         for j in range(variance_size):
             optimize = _ConditionalOnVarianceElementOptimizer(
-                    self.model, price_size, previous_quantizer, variance_state, j)
+                    self.model,
+                    price_size,
+                    previous_quantizer,
+                    variance_state,
+                    j)
             all_price_states[j] = optimize()
 
         # Join processes
@@ -216,49 +220,43 @@ class ConditionalOnVarianceQuantization(AbstractQuantization):
             transition_probability[:,:,j,:] = \
                  all_price_states[j].transition_probability
 
-        variance_quantizer = MarginalVarianceQuantization.Quantizer(
+        variance_quantizer = MarginalVariance._QuantizerFactory(
                 value = variance_state.value,
                 probability = variance_state.probability,
                 transition_probability = variance_state.transition_probability)
 
-        return ConditionalOnVariance.Quantizer(
+        return ConditionalOnVariance._QuantizerFactory(
                 price_value=price_value,
                 variance_quantizer=variance_quantizer,
                 probability=probability,
                 transition_probability=transition_probability)
 
 
-class MarginalVarianceQuantization():
+class MarginalVariance(AbstractQuantization):
 
-    Quantizer = collections.namedtuple('MarginalVarianceQuantizer',
-            ['value',
-            'probability',
-            'transition_probability'])
-
-    def __init__(self, model, first_value,
-            size=100, first_probability=1.,
+    def __init__(self, model, first_value, size=100, first_probability=1.,
             nper=None):
         shape = self._get_shape(nper, size)
         first_quantizer = self._get_first_quantizer(
                 first_value, first_probability)
-        super(MarginalVarianceQuantization, self).__init__(
-                model, shape, first_quantizer)
+        super(MarginalVariance, self).__init__(model, shape, first_quantizer)
 
     def get_markov_chain(self):
-        sizes = []
-        values = []
-        probabilities = []
-        transition_probabilities = []
-        for q in self.all_quantizers:
-            sizes.append(q.value.size)
-            values.append(q.value)
-            probabilities.append(q.probability)
-            transition_probabilities.append(q.transition_probability)
-        return MarkovChain(nper=len(q), ndim=1,
-                sizes=sizes,
-                values=values,
-                probabilities=probabilities,
-                transition_probabilities=transition_probabilities)
+        pass
+        # sizes = []
+        # values = []
+        # probabilities = []
+        # transition_probabilities = []
+        # for q in self.all_quantizers:
+        #     sizes.append(q.value.size)
+        #     values.append(q.value)
+        #     probabilities.append(q.probability)
+        #     transition_probabilities.append(q.transition_probability)
+        # return MarkovChain(nper=len(q), ndim=1,
+        #         sizes=sizes,
+        #         values=values,
+        #         probabilities=probabilities,
+        #         transition_probabilities=transition_probabilities)
 
     def quantize(self, t, values):
         pass
@@ -271,7 +269,7 @@ class MarginalVarianceQuantization():
         probability = np.broadcast_to(probability, value.shape)
         # ...and quietly normalize
         probability = probability/np.sum(probability)
-        return MarginalVariance.Quantizer(
+        return MarginalVariance._QuantizerFactory(
                 value=value,
                 probability=probability,
                 transition_probability=None)
@@ -285,9 +283,10 @@ class MarginalVarianceQuantization():
         return shape
 
     def _one_step_optimize(self, size, previous_quantizer):
-        optimize = _MarginalVarianceOptimizer(self.model, size, previous_quantizer)
+        optimize = _MarginalVarianceOptimizer(
+                self.model, size, previous_quantizer)
         result = optimize()
-        return MarginalVariance.Quantizer(
+        return MarginalVariance._QuantizerFactory(
                 value=result.value,
                 probability=result.probability,
                 transition_probability=result.transition_probability)
@@ -504,7 +503,7 @@ class _ConditionalOnVarianceElementState():
 
     @property
     def voronoi(self):# returns (m+1)
-        out = get_voronoi_1d(self.value, lb=0.)
+        out = voronoi_1d(self.value, lb=0.)
         return out
 
 
@@ -517,6 +516,7 @@ class _MarginalVarianceOptimizer():
 
     def __init__(self, model, size, previous_quantizer):
         self.model = model
+        self.shape = (size,)
         self.size = size
         self.previous_quantizer = previous_quantizer
 
@@ -527,23 +527,24 @@ class _MarginalVarianceOptimizer():
             # Early failure if optimizer unsuccessful
             raise RuntimeError
         else:
-            return self.eval_at(optim_x)
+            return self.eval_at_x(optim_x)
 
     def _perform_optimization(self, init=None, try_number=0):
         # TODO return success==false when try_number reach MAX
         if init is None:
             init = np.zeros(self.size)
-        assert init.size==self.size
+        elif init.size != self.size:
+            raise ValueError
 
         # We let the minimization run until the predicted reduction
         #   in distortion hits zero (or less) by setting gtol=0 and
         #   maxiter=inf. We hence expect a status flag of 2.
         sol = scipy.optimize.minimize(
-                lambda x: self.eval_at(x).distortion,
+                lambda x: self.eval_at_x(x).distortion,
                 init,
                 method='trust-ncg',
-                jac=lambda x: self.eval_at(x).transformed_gradient,
-                hess=lambda x: self.eval_at(x).transformed_hessian,
+                jac=lambda x: self.eval_at_x(x).transformed_gradient,
+                hess=lambda x: self.eval_at_x(x).transformed_hessian,
                 options={'disp':False, 'maxiter':np.inf, 'gtol':0.})
 
         success = sol.status==2 or sol.status==0
@@ -563,11 +564,22 @@ class _MarginalVarianceOptimizer():
         # Format output
         return success, sol.x
 
-    # TODO: is cache really necessary here
+    def eval_at_x(self, x):
+        return _MarginalVarianceState.make_from_x(self, x)
+
+    def eval_at_value(self, value):
+        return _MarginalVarianceState.make_from_value(self, value)
+
+    # Caching states??
+    # def eval_at_x(self, x):
+    #     x.flags.writeable = False
+    #     return self._eval_at_x(tuple(x))
+
     # @lru_cache(maxsize=None)
-    def eval_at(self, x):
-        x.flags.writeable = False
-        return _MarginalVarianceState(self, x)
+    # def _eval_at_x(self, x):
+    #     return _MarginalVarianceState.make_from_x(self, np.array(x))
+
+    # Utilities
 
     @lazy_property
     def min_variance (self):
@@ -576,173 +588,166 @@ class _MarginalVarianceOptimizer():
 
 class _MarginalVarianceState():
 
-    def __init__(self, parent, x):
+    def __init__(self, parent):
         self.parent = parent
+
+    # Factories
+    @staticmethod
+    def make_from_x(parent, x):
+        self = _MarginalVarianceState(parent)
         self.x = x
-        assert self.x.ndim == 1 and self.x.shape == (self.parent.size,)
+        self.value = self.get_changed_variable()
+        if (self.x.ndim != 1
+                or self.x.shape != (self.parent.size,)):
+            raise ValueError
+        return self
 
-    # For optimizer
-    @property
-    def distortion(self):
-        out = np.sum(self.integrals[2]
-                - 2.*self.integrals[1]*self.value[np.newaxis,:]
-                + self.integrals[0]*self.value[np.newaxis,:]**2., axis=1)
-        out = self.parent.previous_quantizer.probability.dot(out)
-        assert not np.isnan(out)
-        return out
-
-    @property
-    def transformed_gradient(self):
-        out = self.gradient.dot(self.jacobian)
-        assert not np.any(np.isnan(out))
-        return out
+    @staticmethod
+    def make_from_value(parent, value):
+        self = _MarginalVarianceState(parent)
+        self.value = value
+        if (self.value.ndim != 1
+                or self.value.shape != (self.parent.size,)):
+            raise ValueError
+        return self
 
     @property
-    def transformed_hessian(self):
-        out = (self.jacobian.T.dot(self.hessian).dot(self.jacobian)
-                + self._get_trans_hess_correction())
-        assert not np.any(np.isnan(out))
-        return out
-
-    def _get_trans_hess_correction(self):
-        out = np.zeros((self.parent.size,self.parent.size))
-        mask = np.empty(self.parent.size)
-        for i in range(self.parent.size):
-            mask[:] = 0.
-            mask[:i+1] = 1.
-            out += self.gradient[i]*np.diag(mask*self.all_exp_x)
-        assert not np.any(np.isnan(out))
-        return out
-
-    # Results
+    def probability(self):
+        return self.parent.previous_quantizer.probability.dot(
+                self.transition_probability)
 
     @property
     def transition_probability(self):
-        out = self.integrals[0]
-        assert not np.any(np.isnan(out))
-        return out
+        return self.get_integral(0)
 
-    @lazy_property
-    def probability(self):
-        out = self.parent.previous_quantizer.probability.dot(self.transition_probability)
-        assert not np.any(np.isnan(out))
-        return out
-
-    @lazy_property
-    def value(self):
-        out = self.parent.min_variance + np.cumsum(self.all_exp_x)
-        assert np.all(np.isfinite(out))
-        assert np.all(out>0)
-        assert np.all(np.diff(out)>0)
-        return out
-
-    @lazy_property
-    def voronoi(self):
-        out = get_voronoi_1d(self.value, lb=0.)
-        assert out[0] == 0.
-        assert out[1]>=self.parent.min_variance
-        return out
-
-    @lazy_property
-    def roots(self):
-        out = self.parent.model.one_step_roots(
-                self.parent.previous_quantizer.value[:,np.newaxis],
-                self.voronoi[np.newaxis,:])
-        return out
+    # For optimizer only
+    @property
+    def distortion(self):
+        elements = np.sum(self.get_distortion_elements(), axis=1)
+        return self.parent.previous_quantizer.probability.dot(elements)
 
     @property
-    def gradient(self):
-        out = -2. * self.parent.previous_quantizer.probability.dot(
-                self.integrals[1]-self.integrals[0]*self.value[np.newaxis,:])
-        assert not np.any(np.isnan(out))
-        return out
+    def transformed_gradient(self):
+        return self.get_gradient().dot(self.get_jacobian())
 
     @property
-    def hessian(self):
+    def transformed_hessian(self):
+        return self.get_first_thess_term() + self.get_second_thess_term()
+
+    #############
+    # Internals #
+    #############
+
+    # Distortion, gradient and Hessian
+
+    def get_distortion_elements(self):
+        return (self.get_integral(2)
+                - 2.*self.get_integral(1)*self.value[np.newaxis,:]
+                + self.get_integral(0)*self.value[np.newaxis,:]**2.)
+
+    def get_gradient(self):
+        return -2. * self.parent.previous_quantizer.probability.dot(
+                self.get_integral(1)
+                - self.get_integral(0)*self.value[np.newaxis,:])
+
+    def get_hessian(self):
         diagonal = -2. * self.parent.previous_quantizer.probability.dot(
-                self.integral_derivatives[0][1]
-                -self.integral_derivatives[0][0]*self.value[np.newaxis,:]
-                -self.integrals[0])
+                self.get_integral_derivative(order=1)
+                -self.get_integral_derivative(order=0)
+                *self.value[np.newaxis,:]
+                -self.get_integral(0))
         off_diagonal = -2. * self.parent.previous_quantizer.probability.dot(
-                self.integral_derivatives[1][1]
-                -self.integral_derivatives[1][0]*self.value[np.newaxis,:])
-        # Build hessian
+                self.get_integral_derivative(order=1, lagged=True)
+                -self.get_integral_derivative(order=0, lagged=True)
+                *self.value[np.newaxis,:])
+        # Build Hessian
         out = np.zeros((self.parent.size, self.parent.size))
         for j in range(self.parent.size):
             out[j,j] = diagonal[j]
             if j>0:
                 out[j-1,j] = off_diagonal[j]
                 out[j,j-1] =out[j-1,j] # make symmetric
-        assert not np.any(np.isnan(out))
         return out
 
-    @lazy_property
-    def integrals(self):
-        return [self._get_integral(order=i) for i in range(3)]
+    # Change of variable helpers
 
-    @lazy_property
-    def pdf(self):
-        return [norm.pdf(self.roots[i]) for i in range(2)]
+    def get_jacobian(self):
+        mask = np.tril(np.ones((self.parent.size, self.parent.size)))
+        return self.get_scaled_exp_x()[np.newaxis,:]*mask
 
-    @lazy_property
-    def cdf(self):
-        return [norm.cdf(self.roots[i]) for i in range(2)]
+    def get_first_thess_term(self):
+        jac = self.get_jacobian()
+        hess = self.get_hessian()
+        return jac.T.dot(hess).dot(jac)
 
-    def _get_integral(self, *, order):
-        integral_func = self.parent.model.one_step_expectation_until
-        integral = [integral_func(self.parent.previous_quantizer.value[:,np.newaxis],
-                self.roots[i], order=order, pdf=self.pdf[i], cdf=self.cdf[i])
+    def get_second_thess_term(self):
+        term = np.zeros((self.parent.size,self.parent.size))
+        mask = np.empty(self.parent.size)
+        grad = self.get_gradient()
+        for i in range(self.parent.size):
+            mask[:] = 0.
+            mask[:i+1] = 1.
+            term += grad[i]*np.diag(mask*self.get_scaled_exp_x())
+        return term
+
+    def get_changed_variable(self):
+        return self.parent.min_variance + np.cumsum(self.get_scaled_exp_x())
+
+    def get_scaled_exp_x(self):
+        return np.exp(self.x)*self.parent.min_variance/(self.parent.size+1.)
+
+    # Integral helpers
+
+    def get_integral(self, order):
+        integral = [self.parent.model.one_step_expectation_until(
+                self.parent.previous_quantizer.value[:,np.newaxis],
+                self.get_roots(i), order=order, pdf=self.get_pdf(i),
+                cdf=self.get_cdf(i))
                 for i in range(2)]
         out = integral[1] - integral[0]
         out[np.isnan(out)] = 0
         out = np.diff(out, n=1, axis=1)
         return out
 
-    @lazy_property
-    def integral_derivatives(self):
-        factor = self._get_factor_for_integral_derivative()
-        dI = [self._get_integral_derivative(factor, order=i, lag=0)
-                for i in range(2)]
-        dI_lagged = [self._get_integral_derivative(factor, order=i, lag=-1)
-                for i in range(2)]
-        return dI, dI_lagged
+    def get_integral_derivative(self, order=0, lagged=False):
+        d = (self._get_integral_derivative_factor()
+                * self.get_voronoi()[np.newaxis,:]**order)
+        d[np.isnan(d)] = 0
+        if lagged:
+            d = -d[:,:-1]
+            d[:,0] = np.nan # first column is meaningless
+        else:
+            d = np.diff(d, n=1, axis=1)
+        return d
 
-    def _get_factor_for_integral_derivative(self):
-        derivative_func = self.parent.model.one_step_roots_unsigned_derivative
-        root_derivative = derivative_func(
+    def _get_integral_derivative_factor(self):
+        unsigned_root_derivative = self.parent.model\
+                .one_step_roots_unsigned_derivative(
                 self.parent.previous_quantizer.value[:,np.newaxis],
-                self.voronoi[np.newaxis,:])
-        factor = (0.5 * root_derivative * (self.pdf[0]+self.pdf[1]))
+                self.get_voronoi()[np.newaxis,:])
+        factor = (0.5 * unsigned_root_derivative
+                * (self.get_pdf(0)+self.get_pdf(1)))
         factor[np.isnan(factor)] = 0
         return factor
 
-    def _get_integral_derivative(self, factor, order=0, lag=0):
-        if order==0:
-            d = factor
-        elif order==1:
-            d = factor * self.voronoi[np.newaxis,:]
-        else:
-            d = factor * self.voronoi[np.newaxis,:]**order
-        d[np.isnan(d)] = 0
-        if lag==-1:
-            d = -d[:,:-1]
-            d[:,0] = np.nan # first column is meaningless
-        elif lag==0:
-            d = np.diff(d, n=1, axis=1)
-        elif lag==1:
-            d = d[:,1:]
-            d[:,-1] = np.nan # last column is meaningless
-        else:
-            assert False # should never happen
-        return d
+    # Roots (Warning: following getters may return NaNs)
+
+    def get_roots(self, right):
+        return self._roots[right]
+
+    def get_pdf(self, right):
+        return norm.pdf(self.get_roots(right))
+
+    def get_cdf(self, right):
+        return norm.cdf(self.get_roots(right))
 
     @lazy_property
-    def all_exp_x(self):
-        return np.exp(self.x)*self.parent.min_variance/self.parent.size
+    def _roots(self):
+        return self.parent.model.one_step_roots(
+                self.parent.previous_quantizer.value[:,np.newaxis],
+                self.get_voronoi()[np.newaxis,:])
 
-    @lazy_property
-    def jacobian(self):
-        mask = np.tril(np.ones((self.parent.size, self.parent.size)))
-        out = self.all_exp_x[np.newaxis,:]*mask
-        assert not np.any(np.isnan(out))
-        return out
+    # Voronoi
+
+    def get_voronoi(self):
+        return voronoi_1d(self.value, lb=0.)
