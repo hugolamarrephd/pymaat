@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 import pymaat.testing as pt
 import pymaat.mathutil as pmu

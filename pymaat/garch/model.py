@@ -104,12 +104,18 @@ class Garch():
 
     @instance_returns_numpy_or_scalar(output_type=(float,float))
     def one_step_roots(self, variances, next_variances):
-        d = np.sqrt((next_variances-self.omega-self.beta*variances)
-                / self.alpha)
-        a = self.gamma * np.sqrt(variances)
-        innov_left = a-d
-        innov_right = a+d
-        return (innov_left, innov_right)
+        fact = (next_variances-self.omega-self.beta*variances)/self.alpha
+        no_root = fact<0.
+        with np.errstate(invalid='ignore'):
+            discr = fact**0.5
+        const = self.gamma * np.sqrt(variances)
+        roots = [const + (pm * discr) for pm in [-1., 1.]]
+        # Enforce NaNs when root does not exist
+        for r in roots:
+            r[no_root] = np.nan
+        # Output as MaskedArray
+        return tuple([np.ma.masked_array(r, mask=no_root, copy=False)
+                for r in roots])
 
     @instance_returns_numpy_or_scalar(output_type=float)
     def one_step_root_from_return(self, returns, variances):
@@ -119,11 +125,12 @@ class Garch():
 
     @instance_returns_numpy_or_scalar(output_type=(float,float))
     def one_step_roots_unsigned_derivative(self, variances, next_variances):
-        denom = np.sqrt(self.alpha
-                * (next_variances-self.omega-self.beta*variances))
-        denom[denom < np.finfo(float).eps] = np.nan
-        der = 0.5/denom
-        return der
+        fact = self.alpha*(next_variances-self.omega-self.beta*variances)
+        no_root = fact<0.
+        with np.errstate(invalid='ignore'):
+            der = 0.5*fact**-0.5
+        der[no_root] = np.nan
+        return np.ma.masked_array(der, mask=no_root, copy=False)
 
     @instance_returns_numpy_or_scalar(output_type=float)
     def one_step_expectation_until(self, variances, innovations, *, order=1,

@@ -1,8 +1,14 @@
 # MACOS
 .DS_Store
-# Editor caches
-# vim
-*.swp
+
+# Editors
+*.swp #vim
+
+# Profiling
+prof/
+*.prof
+*.lprof
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
