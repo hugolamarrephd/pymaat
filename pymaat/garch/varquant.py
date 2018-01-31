@@ -332,7 +332,6 @@ class _Quantizer():
             #   When a root does not exist, delta is 0
             no_root = unsigned_root_derivative.mask
             out[no_root] = 0.
-            out = np.ma.filled(out, 0.)
             # In the limiting case when voronoi is +np.inf (which
             #   always occur in the last column), delta is zero.
             out[:,-1] = 0.
