@@ -3,7 +3,8 @@ from abc import ABC, abstractmethod
 import numpy as np
 from scipy.stats import norm
 
-from pymaat.util import np_method
+from pymaat.nputil import atleast_1d, elbyel
+from pymaat.util import method_decorator
 
 def get_garch_factory(retype='', vartype='hngarch'):
     #TODO
@@ -48,7 +49,7 @@ class AbstractOneLagGarch(ABC):
     # Timeseries #
     ##############
 
-    @np_method
+    @method_decorator(atleast_1d)
     def timeseries_filter(self, returns, first_variances):
         self._raise_value_error_if_any_invalid_variance(first_variances)
         # Initialize outputs
@@ -69,7 +70,7 @@ class AbstractOneLagGarch(ABC):
             (variances[t+1], innovations[t]) = self.one_step_filter(r,h)
         return (variances, innovations)
 
-    @np_method
+    @method_decorator(atleast_1d)
     def timeseries_generate(self, innovations, first_variances):
         self._raise_value_error_if_any_invalid_variance(first_variances)
         # Initialize ouputs
@@ -93,11 +94,11 @@ class AbstractOneLagGarch(ABC):
     # One step #
     ############
 
-    @np_method
+    @method_decorator(elbyel)
     def get_lowest_one_step_variance(self, variances):
         return self.omega + self.beta*variances
 
-    @np_method
+    @method_decorator(elbyel)
     def one_step_filter(self, returns, variances):
         volatilities = np.sqrt(variances)
         innovations = self._one_step_innovation_equation(returns,
@@ -106,7 +107,7 @@ class AbstractOneLagGarch(ABC):
                 variances, volatilities)
         return (next_variances, innovations)
 
-    @np_method
+    @method_decorator(elbyel)
     def one_step_generate(self, innovations, variances):
         volatilities = np.sqrt(variances)
         returns = self._one_step_return_equation(innovations,
@@ -115,7 +116,7 @@ class AbstractOneLagGarch(ABC):
                 variances, volatilities)
         return (next_variances,returns)
 
-    @np_method
+    @method_decorator(elbyel)
     def one_step_roots(self, variances, next_variances):
         limit_index = next_variances==np.inf
         # Complex roots are silently converted to NaNs.
@@ -126,10 +127,10 @@ class AbstractOneLagGarch(ABC):
         limit_index = np.broadcast_to(limit_index, roots[0].shape)
         roots[0][limit_index] = -np.inf
         roots[1][limit_index] = np.inf
-        # Output as tuple
+        # Output tuple
         return tuple(roots)
 
-    @np_method
+    @method_decorator(elbyel)
     def one_step_roots_unsigned_derivative(self, variances, next_variances):
         discr = next_variances-self.get_lowest_one_step_variance(variances)
         # Register limit cases
@@ -145,9 +146,9 @@ class AbstractOneLagGarch(ABC):
             der[np.broadcast_to(index, der.shape)] = lim
         return der
 
-    @np_method
-    def one_step_expectation_until(self, variances, innovations, *, order=1,
-            _pdf=None, _cdf=None):
+    @method_decorator(elbyel)
+    def one_step_expectation_until(self, variances, innovations, *,
+            order=0, _pdf=None, _cdf=None):
         """
         Integrate
             ```
@@ -209,79 +210,3 @@ class AbstractOneLagGarch(ABC):
     # TODO: Send to estimator
     # def negative_log_likelihood(self,innovations ,variances):
     #     return 0.5 * (np.power(innovations , 2) + np.log(variances))
-
-class HestonNandiGarch(AbstractOneLagGarch):
-
-    def __init__(self, mu, omega, alpha, beta, gamma):
-        self.mu = mu
-        self.omega = omega
-        self.alpha = alpha
-        self.beta = beta
-        self.gamma = gamma
-        if (1 - self.beta - self.alpha*self.gamma**2 <= 0):
-            raise ValueError
-
-    # Return Specification
-
-    def _one_step_return_equation(self, innovations, variances, volatilities):
-        """
-            `r_t = (mu - 0.5)*h_{t} + sqrt(h_{t}) * z_{t}`
-        """
-        return (self.mu-0.5)*variances + volatilities*innovations
-
-    def _one_step_innovation_equation(self, returns, variances, volatilities):
-        return (returns-(self.mu-0.5)*variances)/volatilities
-
-    # Variance Specification
-
-    def _one_step_equation(self, innovations, variances, volatilities):
-        """
-         ` h_{t+1} = omega + beta*h_{t} + alpha*(z_t-gamma*sqrt(h_{t}))^2`
-        """
-        return (self.omega + self.beta*variances
-                + self.alpha*np.power(innovations-self.gamma*volatilities,2))
-
-    def _get_one_step_roots(self, variances, next_variances):
-        discr = (next_variances-self.omega-self.beta*variances)/self.alpha
-        const = self.gamma * np.sqrt(variances)
-        with np.errstate(invalid='ignore'):
-            roots = [const + (pm * discr**0.5) for pm in [-1., 1.]]
-        return roots
-
-    def _get_one_step_roots_unsigned_derivative(self,
-            variances, next_variances):
-        factor = self.alpha*(next_variances-self.omega-self.beta*variances)
-        with np.errstate(divide='ignore', invalid='ignore'):
-            return 0.5*factor**-0.5
-
-    def _get_one_step_first_order_expectation_factors(self,
-            variances, innovations):
-        # PDF
-        pdf_factor = 2*self.gamma*np.sqrt(variances)-innovations
-        pdf_factor *= self.alpha
-        # CDF
-        cdf_factor = (self.omega + self.alpha
-                + (self.beta+self.alpha*self.gamma**2) * variances)
-        return (pdf_factor, cdf_factor)
-
-    def _get_one_step_second_order_expectation_factors(self,
-            variances, innovations):
-        # Preliminary computations
-        vol = variances**0.5
-        gamma_vol = self.gamma*vol
-        gamma_vol_squared = gamma_vol**2.
-        innovations_squared = innovations**2.
-        betah_plus_omega = self.beta*variances + self.omega
-        # PDF
-        pdf_factor = (self.alpha
-                    *(2.*gamma_vol_squared*(2.*gamma_vol-3.*innovations)
-                    + 4.*gamma_vol*(innovations_squared+2.)
-                    - innovations*(innovations_squared+3.))
-                    + 2.*(2.*gamma_vol-innovations)*betah_plus_omega)
-        pdf_factor *= self.alpha
-        # CDF
-        cdf_factor = (self.alpha**2.
-                *(gamma_vol_squared*(gamma_vol_squared+6.)+3.)
-                + 2.*self.alpha*(gamma_vol_squared+1.)*betah_plus_omega
-                + betah_plus_omega**2.)
-        return (pdf_factor, cdf_factor)

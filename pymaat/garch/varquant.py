@@ -13,7 +13,7 @@ class MarginalVariance(AbstractQuantization):
 
     def __init__(self, model, first_variance, size=100, first_probability=1.,
             nper=None):
-        shape = self._get_shape(nper, size)
+        shape = self._init_shape(nper, size)
         first_quantizer = self._make_first_quantizer(
                 first_variance,
                 first_probability)
@@ -40,6 +40,14 @@ class MarginalVariance(AbstractQuantization):
         pass
 
     @staticmethod
+    def _init_shape(nper, size):
+        if nper is not None:
+            shape = np.broadcast_to(size, (nper,))
+        else:
+            shape = np.atleast_1d(size)
+        return shape
+
+    @staticmethod
     def _make_first_quantizer(value, probability):
         # Set first values
         value = np.ravel(np.atleast_1d(value))
@@ -48,14 +56,6 @@ class MarginalVariance(AbstractQuantization):
         # ...and quietly normalize
         probability = probability/np.sum(probability)
         return _QuantizerFactory.make_stub(value, probability)
-
-    @staticmethod
-    def _get_shape(nper, size):
-        if nper is not None:
-            shape = np.broadcast_to(size, (nper,))
-        else:
-            shape = np.atleast_1d(size)
-        return shape
 
     def _one_step_optimize(self, size, previous):
         result = _QuantizerFactory(self.model, size, previous).optimize()
@@ -87,12 +87,10 @@ class _QuantizerFactory:
         x.flags.writeable = False
         key = sha1(x).hexdigest()
         quant = self._cache.get(key)
-        if quant:
-            return quant
-        else:
+        if quant is None:
             quant =_Unconstrained(self, x)
             self._cache[key] = quant
-            return quant
+        return quant
 
     def make(self, value):
         return _Quantizer(self, value)
@@ -101,9 +99,9 @@ class _QuantizerFactory:
     def make_stub(value, probability):
         """
         Returns a minimal quantizer-like object which may be used
-        as a previous quantizer when instantiating a subsequent
-        factory.  It is most useful for initiating a recursion,
-        ie for making the first time step quantizer
+            as a previous quantizer when instantiating a subsequent
+            factory.
+        Rem. It is used for initializing recursions and testing
         """
         if np.any(np.isnan(value)) or np.any(~np.isfinite(value)):
             msg = 'Invalid value: NaNs or infinite'
@@ -142,7 +140,6 @@ class _QuantizerFactory:
         return self.model.get_lowest_one_step_variance(
                 np.amin(self.previous.value))
 
-
 class _Quantizer():
 
     def __init__(self, parent, value):
@@ -154,7 +151,6 @@ class _Quantizer():
             self.size = parent.size
             self.shape = parent.shape
             self.previous = parent.previous
-            self.min_variance = parent.min_variance
 
         value = np.asarray(value)
         if value.shape != self.shape:
@@ -162,10 +158,6 @@ class _Quantizer():
             raise ValueError(msg)
         elif ( np.any(np.isnan(value)) or np.any(~np.isfinite(value)) ):
             msg = 'Invalid quantizer'
-            raise ValueError(msg)
-        elif np.any(value<=self.min_variance):
-            msg = ('Unexpected quantizer value(s): '
-                    'must be strictly above minimum variance')
             raise ValueError(msg)
         elif np.any(np.diff(value)<=0.):
             msg = ('Unexpected quantizer value(s): '
@@ -233,6 +225,7 @@ class _Quantizer():
                     self._integral_derivative_lagged[1]
                     -self._integral_derivative_lagged[0]
                     *self.value[np.newaxis,1:])
+
         # Build Hessian
         d = _get_diagonal()
         od = _get_off_diagonal()
@@ -273,10 +266,10 @@ class _Quantizer():
             integral = [self.model.one_step_expectation_until(
                     self.previous.value[:,np.newaxis],
                     self._roots[right], order=order,
-                    pdf=self._pdf[right], cdf=self._cdf[right])
+                    _pdf=self._pdf[right], _cdf=self._cdf[right])
                     for right in [False, True]]
             out = integral[True] - integral[False]
-            out = np.ma.filled(out, 0.)
+            out[self._no_roots] = 0.0
             return np.diff(out, n=1, axis=1)
         return [_get_integral(order) for order in [0,1,2]]
 
@@ -323,18 +316,21 @@ class _Quantizer():
                 self.model.one_step_roots_unsigned_derivative(
                 self.previous.value[:,np.newaxis],
                 self.voronoi[np.newaxis,:])
+        limit_index = unsigned_root_derivative==np.inf
         factor = (0.5*unsigned_root_derivative
                 *(self._pdf[True]+self._pdf[False]))
 
         def _get_delta(order):
-            out = factor*self.voronoi[np.newaxis,:]**order
-            out = out.data
-            #   When a root does not exist, delta is 0
-            no_root = unsigned_root_derivative.mask
-            out[no_root] = 0.
-            # In the limiting case when voronoi is +np.inf (which
-            #   always occur in the last column), delta is zero.
+            with np.errstate(invalid='ignore'):
+                out = factor*self.voronoi[np.newaxis,:]**order
+            # Limit cases
+            # (1)  When a root does not exist, delta is 0
+            out[self._no_roots] = 0.
+            # (2) When voronoi is +np.inf (which always occur
+            #   at the last column), delta is zero.
             out[:,-1] = 0.
+            # (3) When roots approach the singularity, delta is np.inf
+            out[limit_index] = np.inf
             return out
 
         return [_get_delta(order) for order in [0,1,2]]
@@ -343,42 +339,32 @@ class _Quantizer():
     def _pdf(self):
         """
         Returns a len-2 tuples containing (left, right) PDF of roots
-        as a masked np array
         """
-        def _get_pdf(roots):
-            with np.errstate(invalid='ignore'):
-                out = norm.pdf(roots.data)
-                return np.ma.masked_array(out,
-                        mask=roots.mask, copy=False)
-
         roots = self._roots
-        return [_get_pdf(roots[right]) for right in [False, True]]
+        with np.errstate(invalid='ignore'):
+            return [norm.pdf(roots[right]) for right in [False, True]]
 
     @lazy_property
     def _cdf(self):
         """
         Returns a len-2 tuples containing (left, right) CDF roots
-        as a masked np array
         """
-        def _get_cdf(roots):
-            with np.errstate(invalid='ignore'):
-                out = norm.cdf(roots.data)
-                return np.ma.masked_array(out,
-                        mask=roots.mask, copy=False)
-
         roots = self._roots
-        return [_get_cdf(roots[right]) for right in [False, True]]
+        with np.errstate(invalid='ignore'):
+            return [norm.cdf(roots[right]) for right in [False, True]]
 
     @lazy_property
     def _roots(self):
         """
         Returns a len-2 tuples containing (left, right) roots
-        as a masked np array where the mask identifies non-existent
-        roots
         """
         return self.model.one_step_roots(
                 self.previous.value[:,np.newaxis],
                 self.voronoi[np.newaxis,:])
+
+    @lazy_property
+    def _no_roots(self):
+        return np.isnan(self._roots[0])
 
 class _Unconstrained(_Quantizer):
 
@@ -388,6 +374,7 @@ class _Unconstrained(_Quantizer):
             raise ValueError(msg)
         x = np.asarray(x)
         self.x = x
+        self.min_variance = parent.min_variance
         self._scaled_exp_x, value = self._change_of_variable(parent, x)
         # Let super catch invalid value...
         super().__init__(parent, value)
@@ -421,6 +408,13 @@ class _Unconstrained(_Quantizer):
         def get_second_term():
             inv_cum_grad = np.flipud(np.cumsum(np.flipud(s.gradient)))
             return np.diag(self._scaled_exp_x * inv_cum_grad)
+
+        # TODO
+        # Some elements could be pm inf at a value approaching
+        #   the root singularity
+        # large_number = np.finfo(np.float64).max
+        # d[d==np.inf] = large_number
+        # od[od==np.inf] = large_number
 
         return get_first_term() + get_second_term()
 
