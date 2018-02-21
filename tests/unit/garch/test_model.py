@@ -95,12 +95,12 @@ class TestTimeseries():
 
     def test_filter_positive_variance(self, model, returns, first_variance):
         variances, _ = model.timeseries_filter(returns, first_variance)
-        pt.assert_greater(variances, 0.0)
+        pt.assert_greater(variances, 0.0, shape='broad')
 
     def test_generate_positive_variance(self, model,
             innovations, first_variance):
         variances,_ = model.timeseries_generate(innovations, first_variance)
-        pt.assert_greater(variances, 0.0)
+        pt.assert_greater(variances, 0.0, shape='broad')
 
 class TestOneStep():
 
@@ -149,12 +149,12 @@ class TestOneStep():
     def test_one_step_filter_positive_variance(self, model,
             returns, variances):
         next_variances, _ = model.one_step_filter(returns, variances)
-        pt.assert_greater(next_variances, 0.0)
+        pt.assert_greater(next_variances, 0.0, shape='broad')
 
     def test_one_step_generate_positive_variance(self, model,
             innovations, variances):
         next_variances, _ = model.one_step_generate(innovations, variances)
-        pt.assert_greater(next_variances, 0.0)
+        pt.assert_greater(next_variances, 0.0, shape='broad')
 
     # One-step innovation roots
 
@@ -193,8 +193,8 @@ class TestOneStep():
 
     def test_root_at_inf_is_pm_inf(self, model, variances, inf):
         roots = model.one_step_roots(variances, inf)
-        pt.assert_equal(roots[0], -np.inf)
-        pt.assert_equal(roots[1], np.inf)
+        pt.assert_equal(roots[0], -np.inf, shape='broad')
+        pt.assert_equal(roots[1], np.inf, shape='broad')
 
     def test_roots_derivatives_when_valid(self, model,
             variances, valid_one_step):
@@ -205,13 +205,14 @@ class TestOneStep():
         def func(next_variances):
             _, z = model.one_step_roots(variances, next_variances)
             return z
-        pt.assert_derivative_at(der, func,  valid_one_step, rtol=1e-4)
+        pt.assert_derivative_at(der, valid_one_step,
+                function = func, rtol=1e-4)
 
     def test_roots_derivative_is_positive(self, model,
             variances, valid_one_step):
         der = model.one_step_roots_unsigned_derivative(
                 variances, valid_one_step)
-        pt.assert_greater(der, 0.0)
+        pt.assert_greater(der, 0.0, shape='broad')
 
     def test_invalid_roots_derivatives(self, model, variances,
             invalid_one_step):
@@ -223,12 +224,12 @@ class TestOneStep():
             variances, lowest_one_step):
         der = model.one_step_roots_unsigned_derivative(
                 variances, lowest_one_step)
-        pt.assert_equal(der, np.inf)
+        pt.assert_equal(der, np.inf, shape='broad')
 
     def test_roots_derivatives_at_inf_are_zero(self, model,
             variances, inf):
         der = model.one_step_roots_unsigned_derivative(variances, inf)
-        pt.assert_equal(der, 0.)
+        pt.assert_equal(der, 0., shape='broad')
 
     # One-step variance integration
     @pytest.mark.parametrize("order", [0,1,2])

@@ -13,6 +13,10 @@ ALL_MODELS = [
 
 ALL_MODEL_IDS = ['HN-GARCH',]
 
+@pytest.fixture(scope='module')
+def variance_scale():
+    return 0.18**2/252.
+
 @pytest.fixture(params=ALL_MODELS, ids=ALL_MODEL_IDS, scope='module')
 def model(request):
     return request.param

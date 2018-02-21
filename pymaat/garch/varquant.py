@@ -1,40 +1,111 @@
-from collections import namedtuple, defaultdict
+from collections import namedtuple
 from hashlib import sha1
+import warnings
+from cachetools import LRUCache
 
 import numpy as np
-import scipy.optimize
-from scipy.stats import norm
+from scipy.linalg import norm as infnorm
+from scipy.optimize import basinhopping
+from scipy.stats import norm, truncnorm, uniform
+import matplotlib.pyplot as plot
 
-from pymaat.garch.quant import AbstractQuantization, MarkovChain
+from pymaat.garch.quant import AbstractQuantization
 from pymaat.mathutil import voronoi_1d
 from pymaat.util import lazy_property
+from pymaat.nputil import diag_view, printoptions
+
 
 class MarginalVariance(AbstractQuantization):
 
-    def __init__(self, model, first_variance, size=100, first_probability=1.,
+    def __init__(
+        self, model, first_variance, size=100, first_probability=1.,
             nper=None):
         shape = self._init_shape(nper, size)
         first_quantizer = self._make_first_quantizer(
-                first_variance,
-                first_probability)
+            first_variance,
+            first_probability)
         super().__init__(model, shape, first_quantizer)
 
-    def get_markov_chain(self):
-        pass
-        # sizes = []
-        # values = []
-        # probabilities = []
-        # transition_probabilities = []
-        # for q in self.all_quantizers:
-        #     sizes.append(q.value.size)
-        #     values.append(q.value)
-        #     probabilities.append(q.probability)
-        #     transition_probabilities.append(q.transition_probability)
-        # return MarkovChain(nper=len(q), ndim=1,
-        #         sizes=sizes,
-        #         values=values,
-        #         probabilities=probabilities,
-        #         transition_probabilities=transition_probabilities)
+   # def get_markov_chain(self):
+   #      sizes = []
+   #      values = []
+   #      probabilities = []
+   #      transition_probabilities = []
+   #      for q in self.all_quantizers:
+   #          sizes.append(q.value.size)
+   #          values.append(q.value)
+   #          probabilities.append(q.probability)
+   #          transition_probabilities.append(q.transition_probability)
+   #      return MarkovChain(nper=len(q), ndim=1,
+   #              sizes=sizes,
+   #              values=values,
+   #              probabilities=probabilities,
+   #              transition_probabilities=transition_probabilities)
+
+    def visualize_all(self):
+        # cmap = matplotlib.cm.get_cmap('gnuplot2')
+        # cmap = matplotlib.colors.LinearSegmentedColormap(
+        #     'gnuplot2_reverse', matplotlib.cm.revcmap(cmap._segmentdata))
+        fig, ax = plt.subplots()
+
+        for (t, q) in enumerate(self.all_quantizers):
+            x = np.broadcast_to(t+1, q.shape)
+            y = np.sqrt(252.*q.value)*100.
+            c = q.probability*100.
+            # Add scatter
+            cax = plt.scatter(x.flatten(), y.flatten(), c=c.flatten(),
+                              marker=",", cmap=cmap, s=ss)
+
+        plt.xlabel(r'Trading Days ($t$)')
+        plt.ylabel(r'Annualized Volatility (%)')
+        plt.xlim(1, t+1)
+        plt.xticks([1, 5, 10, 15, 20])
+        plt.yticks([10, 20, 30, 40])
+
+        # Add colorbar
+        cbar = fig.colorbar(cax)
+        cbar.ax.set_title(r'$p_{h}^{(i)}$(%)', fontsize=fs)
+
+        fig.set_size_inches(4, 3)
+        ax.grid(True, linestyle='dashed', alpha=0.5, axis='y')
+        plt.tight_layout()
+        # plt.savefig('marginal_variance.eps', format='eps', dpi=1000)
+
+    def visualize_transition(self, t=1):
+        if t == 0:
+            raise ValueError
+        x = np.sqrt(252.*mc.values[t])*100.
+        selected = np.logical_and(x > 10., x < 30.)
+        x = x[selected, np.newaxis]
+        y = np.sqrt(252.*mc.values[t+1])*100.
+        y = y[np.newaxis, selected]
+        c = mc.transition_probabilities[t]*100.
+        c = c[selected][:, selected]
+        x, y = np.broadcast_arrays(x, y)
+
+        fig, ax = plt.subplots()
+
+        # Add scatter
+        cax = plt.scatter(x.flatten(), y.flatten(), c=c.flatten(),
+                          marker=",", cmap=cmap,
+                          s=ss, linewidths=0.15)
+
+        plt.xlabel(r'Annualized Volatility (%) at t=10', fontsize=fs)
+        plt.ylabel(r'Annualized Volatility (%) at t=11', fontsize=fs)
+        plt.xticks([10, 15, 20, 25, 30], fontsize=fs)
+        plt.yticks([10, 15, 20, 25, 30], fontsize=fs)
+        plt.xlim(10, 30)
+        plt.ylim(10, 30)
+        plt.tight_layout()
+
+        # Add colorbar
+        cbar = fig.colorbar(cax)
+        cbar.ax.set_title(r'$p_{h}^{(ij)}$(%)', fontsize=fs)
+
+        fig.set_size_inches(4, 3)
+        ax.grid(True, linestyle='dashed', alpha=0.5)
+        plt.tight_layout()
+        # plt.savefig('marginal_variance_transition.eps', format='eps', dpi=1000)
 
     def quantize(self, t, values):
         pass
@@ -57,12 +128,10 @@ class MarginalVariance(AbstractQuantization):
         probability = probability/np.sum(probability)
         return _QuantizerFactory.make_stub(value, probability)
 
-    def _one_step_optimize(self, size, previous):
-        result = _QuantizerFactory(self.model, size, previous).optimize()
-        return MarginalVariance._QuantizerFactory(
-                value=result.value,
-                probability=result.probability,
-                transition_probability=result.transition_probability)
+    def _one_step_optimize(
+            self, size, previous, *, init=None):
+        return _QuantizerFactory(
+            self.model, size, previous).optimize(init)
 
 
 class _QuantizerFactory:
@@ -72,25 +141,93 @@ class _QuantizerFactory:
         self.shape = (size,)
         self.size = size
         self.previous = previous
-        self._cache = defaultdict()
+        self._cache = LRUCache(maxsize=30)
+        if np.any(self.previous.probability <= 0.):
+            raise ValueError(
+                "Previous probabilities must be strictly positive")
 
-    def optimize(self):
-        # Perform optimization
-        success, optim_x = self._perform_optimization()
-        if not success:
-            # Early failure if optimizer unsuccessful
-            raise RuntimeError
+    def optimize(self, *, niter=1000, seed=None, init=None, verbose=True):
+        self._T = self.min_variance**2./(self.previous.size*self.size**2.)
+        self._tol = self._T*1e-6
+        if init is None:
+            init = np.zeros(self.size)
+
+        def func(x): return self.make_unconstrained(x).distortion
+        self.take_step = _OptimizerTakeStep(self, seed)
+        # Set up convex optimizer...
+
+        def jac(x): return self.make_unconstrained(x).gradient
+
+        def hess(x): return self.make_unconstrained(x).hessian
+        options = {'maxiter': 1000, 'disp': False, 'gtol': self._tol}
+        minimizer_kwargs = {
+            'method': 'trust-ncg',
+            'jac': jac,
+            'hess': hess,
+            'options': options
+        }
+        if verbose:
+            callback = self._print_callback
         else:
-            return self.make_unconstrained(optim_x)
+            def callback(x, f, a): return None
+        try:
+            opt = basinhopping(
+                func,
+                init,
+                niter=niter,
+                T=self._T,
+                take_step=self.take_step,
+                disp=False,
+                minimizer_kwargs=minimizer_kwargs,
+                callback=callback,
+                niter_success=100
+            )
+        except _AtSingularity as exc:
+            # Optimizer met a singularity for indices idx
+            init[exc.idx] += 1e-2
+            if verbose:
+                print("Singularity failure: re-booting optimizer\n")
+            return self.optimize(
+                niter=niter, seed=seed, init=init, verbose=verbose)
+        return self.make_unconstrained(opt.x)
+
+    def _print_callback(self, x, f, accept):
+        q = self.make_unconstrained(x)
+
+        # Initialization
+        if not hasattr(self, '_distortion'):
+            self._distortion = q.distortion
+            self._value = q.value
+            self._niter = 0
+
+        if q.distortion < self._distortion:
+            objective = 100.*(q.distortion/self._distortion-1.)
+            msg = "\n[#{0:d}] ".format(self._niter)
+            msg += "New Global Optimum"
+            msg += " {0:+.2f}% from global {1:.4e}\n".format(
+                objective, self._distortion)
+            msg += "\tDistortion: {0:.32e}\n".format(q.distortion)
+            msg += "\tStepsize: {0:.2f}\n".format(self.take_step.stepsize)
+            msg += "\tGradient (tol): {0:.4e} ({1:.4e})\n".format(
+                infnorm(q.gradient), self._tol)
+            change = 100.*np.amax(np.absolute(q.value/self._value-1.))
+            msg += "\tDelta-Quantizer: {0:.2f}%\n".format(change)
+            msg += "\tQuantizer(%\y):"
+            print(msg)
+            with printoptions(precision=2):
+                print("\t{}".format(np.sqrt(252.*q.value)*100.))
+            self._distortion = q.distortion
+            self._value = q.value
+
+        self._niter += 1
 
     def make_unconstrained(self, x):
         x.flags.writeable = False
         key = sha1(x).hexdigest()
-        quant = self._cache.get(key)
-        if quant is None:
-            quant =_Unconstrained(self, x)
+        if key not in self._cache:
+            quant = _Unconstrained(self, x)
             self._cache[key] = quant
-        return quant
+        return self._cache.get(key)
 
     def make(self, value):
         return _Quantizer(self, value)
@@ -106,39 +243,83 @@ class _QuantizerFactory:
         if np.any(np.isnan(value)) or np.any(~np.isfinite(value)):
             msg = 'Invalid value: NaNs or infinite'
             raise ValueError(msg)
-        if np.any(value<=0.):
+        if np.any(value <= 0.):
             msg = 'Invalid value: variance must be strictly positive'
             raise ValueError(msg)
-        if np.abs(np.sum(probability)-1.)>1e-12 or np.any(probability<0.):
+        if (
+            np.abs(np.sum(probability)-1.) > 1e-12
+            or np.any(probability < 0.)
+        ):
             msg = 'Probabilities must sum to one and be positive'
             raise ValueError(msg)
-        fact = namedtuple( '_Quantizer',
-            ['value', 'probability', 'size', 'shape'])
+        fact = namedtuple('_Quantizer',
+                          ['value', 'probability', 'size', 'shape'])
         return fact(value=value, probability=probability,
-                size=value.size, shape=value.shape)
-
-    def _perform_optimization(self, init=None):
-        if init is None:
-            init = np.zeros(self.size)
-        func = lambda x: self.make_unconstrained(x).distortion
-        jac = lambda x: self.make_unconstrained(x).gradient
-        hess = lambda x: self.make_unconstrained(x).hessian
-        minimizer_kwargs = {
-                'method':'trust-ncg',
-                'jac':jac,
-                'hess':hess,
-                'options':{'disp':False, 'maxiter':np.inf, 'gtol':1e-24}}
-        sol = scipy.optimize.basinhopping(func, init,
-                minimizer_kwargs=minimizer_kwargs)
-        # Format output
-        return True, sol.x
+                    size=value.size, shape=value.shape)
 
     # Utilities
 
     @lazy_property
     def min_variance(self):
         return self.model.get_lowest_one_step_variance(
-                np.amin(self.previous.value))
+            np.amin(self.previous.value))
+
+    @lazy_property
+    def singularities(self):
+        return np.sort(
+            self.model.get_lowest_one_step_variance(
+                self.previous.value))
+
+
+class _OptimizerTakeStep():
+
+    def __init__(self, parent, seed=None):
+        if seed is not None:
+            self.random_state = np.random.RandomState(seed)
+        else:
+            self.random_state = np.random.RandomState()
+        self.parent = parent
+        self.stepsize = 1.
+        if self.parent.previous.size > 1:
+            self.scale = np.mean(np.diff(self.parent.singularities))
+        else:
+            raise ValueError
+
+    def __call__(self, x):
+        _, old_value = _Unconstrained._change_of_variable(self.parent, x)
+        new_value = old_value.copy()
+        new_value = self._make_forward_pass(new_value)
+        new_x = _Unconstrained._inv_change_of_variable(
+            self.parent, new_value)
+        # Bound x to avoid numerical instability
+        return np.clip(new_x, -10., 20.)
+
+    def _make_forward_pass(self, value):
+        lb = self.parent.singularities[0]
+        ub = value[-1]
+        for i in range(value.size):
+            loc = value[i]
+            scale = self.stepsize*self.scale
+            a_ = (lb-loc)/scale
+            b_ = (ub-loc)/scale
+            tmp = truncnorm.rvs(
+                a_, b_,
+                loc=loc, scale=scale,
+                random_state=self.random_state)
+            if not (tmp > lb and tmp < ub):
+                # Fail-safe if numerical instability arises
+                value[i:] = uniform(
+                    lb, ub,
+                    size=value[i:].shape,
+                    random_state=self.random_state)
+                msg = "Take-step failsafe: numerical instability "
+                msg += " [stepsize={.2f}]".format(self.stepsize)
+                warnings.warn(msg, UserWarning)
+                break
+            else:
+                lb = value[i] = tmp
+        return value
+
 
 class _Quantizer():
 
@@ -147,6 +328,7 @@ class _Quantizer():
             msg = 'Quantizers must be instantiated from valid factory'
             raise ValueError(msg)
         else:
+            self.parent = parent
             self.model = parent.model
             self.size = parent.size
             self.shape = parent.shape
@@ -156,12 +338,12 @@ class _Quantizer():
         if value.shape != self.shape:
             msg = 'Unexpected quantizer shape'
             raise ValueError(msg)
-        elif ( np.any(np.isnan(value)) or np.any(~np.isfinite(value)) ):
-            msg = 'Invalid quantizer'
+        elif (np.any(np.isnan(value)) or np.any(~np.isfinite(value))):
+            msg = 'Invalid quantizer (NaN or inf)'
             raise ValueError(msg)
-        elif np.any(np.diff(value)<=0.):
+        elif np.any(np.diff(value) <= 0.):
             msg = ('Unexpected quantizer value(s): '
-                    'must be strictly increasing')
+                   'must be strictly increasing')
             raise ValueError(msg)
         else:
             self.value = value
@@ -203,10 +385,11 @@ class _Quantizer():
         Returns self.size np.array representing the gradient
         of self.distortion
         """
-        return -2. * self.previous.probability.dot(
-                self._integral[1]
-                - self._integral[0]
-                *self.value[np.newaxis,:])
+        out = -2. * self.previous.probability.dot(
+            self._integral[1]
+            - self._integral[0]
+            * self.value[np.newaxis, :])
+        return out
 
     @property
     def hessian(self):
@@ -214,22 +397,23 @@ class _Quantizer():
         Returns a self.size-by-self.size np.array containing the
         Hessian of self.distortion
         """
-        def _get_diagonal():
-            return -2. * self.previous.probability.dot(
-                    self._integral_derivative[1]
-                    -self._integral_derivative[0]
-                    *self.value[np.newaxis,:]
-                    -self._integral[0])
-        def _get_off_diagonal():
-            return -2. * self.previous.probability.dot(
-                    self._integral_derivative_lagged[1]
-                    -self._integral_derivative_lagged[0]
-                    *self.value[np.newaxis,1:])
+        with np.errstate(invalid='ignore'):
+            # (minus, plus)
+            terms = ((self.value - self.voronoi[:-1])*self._delta[:, :-1],
+                     (self.voronoi[1:] - self.value)*self._delta[:, 1:])
+            # Catch inf*zero indetermination at voronoi=np.inf...
+            terms[1][:, -1] = 0.
 
         # Build Hessian
-        d = _get_diagonal()
-        od = _get_off_diagonal()
-        hess = np.diag(d) + np.diag(od, k=-1) + np.diag(od, k=1)
+        hess = np.zeros((self.size, self.size))
+        main_diagonal = -2. * self.previous.probability.dot(
+            terms[0] + terms[1] - self._integral[0])
+        diag_view(hess, k=0)[:] = main_diagonal
+        if self.size > 1:
+            off_diagonal = -2. * self.previous.probability.dot(
+                terms[0][:, 1:])
+            diag_view(hess, k=1)[:] = off_diagonal
+            diag_view(hess, k=-1)[:] = off_diagonal
         return hess
 
     #############
@@ -248,8 +432,8 @@ class _Quantizer():
         Rem. Output only has valid entries, ie free of NaNs
         """
         return (self._integral[2]
-                - 2.*self._integral[1]*self.value[np.newaxis,:]
-                + self._integral[0]*self.value[np.newaxis,:]**2.)
+                - 2.*self._integral[1]*self.value[np.newaxis, :]
+                + self._integral[0]*self.value[np.newaxis, :]**2.)
 
     @lazy_property
     def _integral(self):
@@ -261,79 +445,59 @@ class _Quantizer():
         ```
         for all i,j.
         Rem. Output only has valid entries, ie free of NaNs
+        BOTTLENECK
         """
+        roots = self._roots
+        previous_value = self.previous.value[:, np.newaxis]
+        cdf = self._cdf
+        pdf = self._pdf
+
         def _get_integral(order):
             integral = [self.model.one_step_expectation_until(
-                    self.previous.value[:,np.newaxis],
-                    self._roots[right], order=order,
-                    _pdf=self._pdf[right], _cdf=self._cdf[right])
-                    for right in [False, True]]
+                previous_value, roots[right], order=order,
+                _pdf=pdf[right], _cdf=cdf[right])
+                for right in [False, True]]
             out = integral[True] - integral[False]
             out[self._no_roots] = 0.0
             return np.diff(out, n=1, axis=1)
-        return [_get_integral(order) for order in [0,1,2]]
-
-    @property
-    def _integral_derivative(self):
-        """
-        Returns a len-3 list indexed by order and filled
-        previous.size-by-size arrays containing
-        ```
-            d\\mathcal{I}_{order,t}^{(ij)}/dh_t^{(j)}
-        ```
-        for all i,j.
-        Rem. Output only has valid entries, ie free of NaNs
-        """
-        return [np.diff(self._delta[order], n=1, axis=1)
-                for order in [0,1,2]]
-
-    @property
-    def _integral_derivative_lagged(self):
-        """
-        Returns a len-3 list indexed by order and filled with
-        previous.size-by-size-1 arrays containing
-        ```
-            d\\mathcal{I}_{order,t}^{(ij)}/dh_t^{(j-1)}
-        ```
-        for all i and j>1.
-        Rem. Output only has valid entries, ie free of NaNs
-        """
-        return [-self._delta[order][:,1:-1] for order in [0,1,2]]
+        return [_get_integral(order) for order in [0, 1, 2]]
 
     @lazy_property
     def _delta(self):
         """
         Returns a previous.size-by-size+1 array containing
         ```
-            \\delta_{order,t}^{(ij\\pm)}
+            \\delta_{t}^{(ij\\pm)}
         ```
-        for all i,j and a given order.
-        Rem. Output only has valid entries, ie free of NaNs
-        In particular, the limiting case where self.voronoi = +np.inf
-        returns zero.
+        for all i,j.
+        Rem. Output only has valid entries, ie free of NaNs, but may be
+            infinite (highly unlikely)
+        In particular,
+            (1) When no root exists (eg. voronoi==0), delta is zero
+            (2) When voronoi==+np.inf, delta is zero
+            (3) When voronoi is at a root singularity, delta is np.inf
         """
         unsigned_root_derivative = \
-                self.model.one_step_roots_unsigned_derivative(
-                self.previous.value[:,np.newaxis],
-                self.voronoi[np.newaxis,:])
-        limit_index = unsigned_root_derivative==np.inf
-        factor = (0.5*unsigned_root_derivative
-                *(self._pdf[True]+self._pdf[False]))
-
-        def _get_delta(order):
-            with np.errstate(invalid='ignore'):
-                out = factor*self.voronoi[np.newaxis,:]**order
-            # Limit cases
-            # (1)  When a root does not exist, delta is 0
-            out[self._no_roots] = 0.
-            # (2) When voronoi is +np.inf (which always occur
-            #   at the last column), delta is zero.
-            out[:,-1] = 0.
-            # (3) When roots approach the singularity, delta is np.inf
-            out[limit_index] = np.inf
-            return out
-
-        return [_get_delta(order) for order in [0,1,2]]
+            self.model.one_step_roots_unsigned_derivative(
+                self.previous.value[:, np.newaxis],
+                self.voronoi[np.newaxis, :])
+        limit_index = unsigned_root_derivative == np.inf
+        if np.any(limit_index):
+            warnings.warn(
+                "Voronoi tiles at singularity detected",
+                UserWarning
+            )
+        out = (0.5*unsigned_root_derivative
+               * (self._pdf[True]+self._pdf[False]))
+        # Limit cases
+        # (1)  When a root does not exist, delta is 0
+        out[self._no_roots] = 0.
+        # (2) When voronoi is +np.inf (which always occur
+        #   at the last column), delta is zero.
+        out[:, -1] = 0.
+        # (3) When roots approach the singularity, delta is np.inf
+        out[limit_index] = np.inf
+        return out
 
     @lazy_property
     def _pdf(self):
@@ -359,12 +523,18 @@ class _Quantizer():
         Returns a len-2 tuples containing (left, right) roots
         """
         return self.model.one_step_roots(
-                self.previous.value[:,np.newaxis],
-                self.voronoi[np.newaxis,:])
+            self.previous.value[:, np.newaxis],
+            self.voronoi[np.newaxis, :])
 
     @lazy_property
     def _no_roots(self):
         return np.isnan(self._roots[0])
+
+
+class _AtSingularity(Exception):
+    def __init__(self, idx):
+        self.idx = np.unique(idx)
+
 
 class _Unconstrained(_Quantizer):
 
@@ -381,9 +551,17 @@ class _Unconstrained(_Quantizer):
 
     @staticmethod
     def _change_of_variable(parent, x):
-        scaled_exp_x = (np.exp(x)*parent.min_variance/(parent.size+1.))
+        scaled_exp_x = np.exp(x)*parent.min_variance / (parent.size+1.)
         value = (parent.min_variance + np.cumsum(scaled_exp_x))
         return (scaled_exp_x, value)
+
+    @staticmethod
+    def _inv_change_of_variable(parent, value):
+        padded_values = np.insert(value, 0, parent.min_variance)
+        expx = (
+            (parent.size+1.)*np.diff(padded_values)/parent.min_variance
+        )
+        return np.log(expx)
 
     @property
     def gradient(self):
@@ -392,7 +570,8 @@ class _Unconstrained(_Quantizer):
         dDistortion/ dx = dDistortion/dGamma * dGamma/dx
         """
         grad = super().gradient
-        return grad.dot(self._jacobian)
+        out = grad.dot(self._jacobian)
+        return out
 
     @property
     def hessian(self):
@@ -400,23 +579,22 @@ class _Unconstrained(_Quantizer):
         Returns the transformed Hessian for the distortion function
         """
         s = super()
+
         def get_first_term():
             jac = self._jacobian
             hess = s.hessian
+            at_singularity = np.logical_not(np.isfinite(hess))
+            if np.any(at_singularity):
+                w = np.where(at_singularity)
+                raise _AtSingularity(w[1])
             return jac.T.dot(hess).dot(jac)
 
         def get_second_term():
             inv_cum_grad = np.flipud(np.cumsum(np.flipud(s.gradient)))
             return np.diag(self._scaled_exp_x * inv_cum_grad)
 
-        # TODO
-        # Some elements could be pm inf at a value approaching
-        #   the root singularity
-        # large_number = np.finfo(np.float64).max
-        # d[d==np.inf] = large_number
-        # od[od==np.inf] = large_number
-
-        return get_first_term() + get_second_term()
+        hess = get_first_term() + get_second_term()
+        return hess
 
     @property
     def _jacobian(self):
@@ -428,4 +606,4 @@ class _Unconstrained(_Quantizer):
         ```
         """
         mask = np.tril(np.ones((self.size, self.size)))
-        return self._scaled_exp_x[np.newaxis,:]*mask
+        return self._scaled_exp_x[np.newaxis, :]*mask

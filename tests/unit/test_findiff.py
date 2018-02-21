@@ -4,6 +4,8 @@ import numpy as np
 import pymaat.testing as pt
 import pymaat.findiff
 
+# TODO: missing many corner cases (what happens when scalar, etc.?)
+
 # Scalar-to-scalar
 def scalar_to_scalar(x):
    return np.power(x, 2.)
@@ -51,28 +53,32 @@ class TestNumericalDerivatives:
 
 
     def test_derivative(self):
-        der = pymaat.findiff.derivative_at(scalar_to_scalar, scalar_arg)
+        der = pymaat.findiff.derivative_at(scalar_arg,
+                function=scalar_to_scalar)
         expected_der = derivative(scalar_arg)
         pt.assert_almost_equal(der, expected_der, rtol=1e-6, atol=1e-6)
 
     def test_derivative_at_zero_raises_value_error(self):
         with pytest.raises(ValueError):
-            der = pymaat.findiff.derivative_at(
-                    scalar_to_scalar, 0)
+            der = pymaat.findiff.derivative_at(0,
+                    function=scalar_to_scalar)
 
     def test_gradient(self):
-        grad = pymaat.findiff.gradient_at(multi_to_scalar, multi_arg)
+        grad = pymaat.findiff.gradient_at(multi_arg,
+                function=multi_to_scalar)
         expected_grad = gradient(multi_arg)
         pt.assert_almost_equal(grad, expected_grad, rtol=1e-6, atol=1e-6)
 
 
     def test_jacobian(self):
-        jac = pymaat.findiff.jacobian_at(multi_to_multi, multi_arg)
+        jac = pymaat.findiff.jacobian_at(multi_arg,
+                function=multi_to_multi)
         expected_jac = jacobian(multi_arg)
         pt.assert_almost_equal(jac, expected_jac, rtol=1e-6, atol=1e-6)
 
 
     def test_hessian(self):
-        hess = pymaat.findiff.hessian_at(multi_to_scalar, multi_arg)
+        hess = pymaat.findiff.hessian_at(multi_arg,
+                function=multi_to_scalar)
         expected_hess = hessian(multi_arg)
         pt.assert_almost_equal(hess, expected_hess, rtol=1e-1, atol=1e-6)

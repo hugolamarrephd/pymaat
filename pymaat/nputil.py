@@ -1,4 +1,5 @@
 from functools import wraps, update_wrapper
+import contextlib
 
 import numpy as np
 
@@ -87,44 +88,79 @@ def _diag_size(shape, k):
 # Decorators #
 ##############
 
+def elbyel(function):
+    '''
+    Element-by-element function decorator.
+
+    Decorated functions may rely on assignments and indexing.
+    '''
+    old_function = function
+    function = atleast_1d(function)
+    function = handle_scalar_input(function)
+    return wraps(old_function)(function)
+
+def forced_elbyel(function):
+    '''
+    Element-by-element function decorator.
+
+    Decorated function may safely assume all its arguments are of the same
+    shape. Decorated functions may thus rely on assignments and indexing.
+    '''
+    old_function = function
+    function = broadcast(function)
+    function = handle_scalar_input(function)
+    return wraps(old_function)(function)
+
 def atleast_1d(function):
     '''
+    Casts scalar positional arguments to ndarray **with at least 1D**,
+        but leaves keyword arguments **untouched**.
+
     Decorated functions may safely assume all positional arguments are numpy
         arrays with at least one dimension.
         In particular, function body may rely on assignments, indexing
         and broadcasting --- even if scalar inputs are provided by user.
+    '''
+    @wraps(function)
+    def wrapper(*args, **kargs):
+        old_args = args
+        args = []
+        for a in old_args:
+            # Warning: can make copy!
+            args.append(np.atleast_1d(np.asanyarray(a)))
+        # Call wrapped function with new arguments
+        return function(*args, **kargs)
+    return wrapper
 
-    Casts scalar  positional arguments to ndarray **with at least 1D**,
-        but leaves keyword arguments **untouched**.
+def broadcast(function):
+    '''
+    Broacasts scalar and ndarray positional arguments
+    to ndarray **of same shape**, but leaves keyword arguments **untouched**.
+
+    Decorated functions may safely assume all positional arguments are numpy
+        arrays of same shape.
 
     Rem. Preserve array subclasses (eg. np.ma.array)
         by calling `np.asanyarray`
     '''
     @wraps(function)
     def wrapper(*args, **kargs):
-        inputs = []
-        for a in args:
-            a = np.asanyarray(a)
-            inputs.append(np.atleast_1d(a)) # Warning: could make copy!
-        # Call wrapped function with new inputs
-        return function(*inputs, **kargs)
+        # Broadcast all arguments
+        *args, = np.broadcast_arrays(*args)
+        # Call wrapped function with new arguments
+        return function(*args, **kargs)
     return wrapper
 
-def elbyel(function):
+def handle_scalar_input(function):
     '''
-    Element-by-element function decorator.
+    When **all** inputs are scalar, array outputs are casted
+        to scalars, ie. with ndim=0 and size==1
 
-    When **all** inputs are scalar, *array* outputs are casted
-        to *scalars*, ie. with ndim=0 and size==1
-    Raises AssertionError when can not cast to scalar (for debugging).
+    Raises AssertionError if can not cast to scalar (mostly for debugging).
 
     Rem. Outputted scalars are not of native types.
         In particular, outputs are np.float64, not built-in float.
-
-    Rem. Decorated functions may rely on assignments and indexing (since
-        function is automatically wrapped with atleast_1d decorator)
     '''
-
     @wraps(function)
     def wrapper(*args, **kargs):
         # Determine if scalar mode
@@ -136,7 +172,7 @@ def elbyel(function):
                 break # Early termination if non-scalar detected
 
         # Call wrapped function with at least 1D arguments
-        outputs = atleast_1d(function)(*args, **kargs)
+        outputs = function(*args, **kargs)
 
         # Post-process when in scalar mode
         if scalar:
@@ -157,7 +193,6 @@ def elbyel(function):
         return outputs
 
     return wrapper
-
 
 def workon_axis(function):
     '''
@@ -208,3 +243,17 @@ def workon_axis(function):
             return new_outputs[0]
 
     return atleast_1d(wrapper)
+
+
+############
+# Printing #
+############
+
+@contextlib.contextmanager
+def printoptions(*args, **kwargs):
+    original = np.get_printoptions()
+    np.set_printoptions(*args, **kwargs)
+    try:
+        yield
+    finally:
+        np.set_printoptions(**original)

@@ -11,28 +11,6 @@ from scipy.stats import norm
 from pymaat.util import lazy_property
 from pymaat.mathutil import voronoi_1d
 
-####################################################
-MAX_VAR_QUANT_TRY = 5
-
-#
-# Interface
-# values: list of length nper+1 containing np.arrays of shape (size[t],)
-#    with elements of length ndim representing stochastic process values
-#    (as a vector)
-# probabilities: list of length nper+1 containing np.arrays
-#    of shape (size[t],) containing np.double representing
-#   probabilities
-# transition_probabilities: list of length nper containing np.arrays
-#    of shape (size[t], size[t+1]) containing np.double representing
-#    transition probabilities
-#
-MarkovChain = collections.namedtuple('MarkovChain',
-            ['nper', 'ndim',
-            'sizes',
-            'values',
-            'probabilities',
-            'transition_probabilities'])
-
 class AbstractQuantization(ABC):
 
 
@@ -41,7 +19,7 @@ class AbstractQuantization(ABC):
         self.shape = shape
         self.first_quantizer = first_quantizer
 
-    def optimize(self):
+    def optimize(self, **kwargs):
         current_quantizer = self.first_quantizer
         # Perform recursion
         self.all_quantizers = []
@@ -50,14 +28,10 @@ class AbstractQuantization(ABC):
             self.all_quantizers.append(current_quantizer)
             # Advance to next time step (computations done here...)
             current_quantizer = self._one_step_optimize(
-                    self.model, s, current_quantizer)
+                    s, current_quantizer, **kwargs)
         # Handle last quantizer
         self.all_quantizers.append(current_quantizer)
         return self #for convenience
-
-    @abstractmethod
-    def get_markov_chain(self):
-        pass
 
     @abstractmethod
     def quantize(self, t, values):
@@ -93,8 +67,8 @@ class ConditionalOnVariance(AbstractQuantization):
         super(ConditionalOnVariance, self).__init__(
                model, shape, first_quantizer)
 
-    def get_markov_chain(self):
-        pass
+    # def get_markov_chain(self):
+    #     pass
         # # TODO: optimize memory
         # sizes = []; values = []; probabilities=[]; transition_probabilities=[]
         # for q in self.all_quantizers:
