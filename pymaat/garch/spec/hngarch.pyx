@@ -1,11 +1,18 @@
+# cython: linetrace=True
+# cython: binding=True
+
 import numpy as np
 
 from pymaat.garch.model import AbstractOneLagGarch
+from pymaat.garch.spec.ret import CentralRiskPremium
+from pymaat.nputil import flat_view, forced_elbyel
+
+from cython cimport boundscheck, wraparound
 
 class HestonNandiGarch(AbstractOneLagGarch):
 
     def __init__(self, mu, omega, alpha, beta, gamma):
-        self.mu = mu
+        super().__init__(CentralRiskPremium(mu))
         self.omega = omega
         self.alpha = alpha
         self.beta = beta
@@ -13,18 +20,6 @@ class HestonNandiGarch(AbstractOneLagGarch):
         if (1 - self.beta - self.alpha*self.gamma**2 <= 0):
             raise ValueError
 
-    # Return Specification
-
-    def _one_step_return_equation(self, innovations, variances, volatilities):
-        """
-            `r_t = (mu - 0.5)*h_{t} + sqrt(h_{t}) * z_{t}`
-        """
-        return (self.mu-0.5)*variances + volatilities*innovations
-
-    def _one_step_innovation_equation(self, returns, variances, volatilities):
-        return (returns-(self.mu-0.5)*variances)/volatilities
-
-    # Variance Specification
 
     def _one_step_equation(self, innovations, variances, volatilities):
         """
@@ -42,9 +37,9 @@ class HestonNandiGarch(AbstractOneLagGarch):
 
     def _get_one_step_roots_unsigned_derivative(self,
             variances, next_variances):
-        factor = self.alpha*(next_variances-self.omega-self.beta*variances)
-        with np.errstate(divide='ignore', invalid='ignore'):
-            return 0.5*factor**-0.5
+        with np.errstate(invalid='ignore', divide='ignore'):
+            return 0.5*(self.alpha*(
+                next_variances-self.omega-self.beta*variances))**-0.5
 
     def _get_one_step_first_order_expectation_factors(self,
             variances, innovations):
@@ -80,3 +75,22 @@ class HestonNandiGarch(AbstractOneLagGarch):
                 + 2.*self.alpha*(gamma_vol_squared+1.)*betah_plus_omega
                 + betah_plus_omega**2.)
         return (pdf_factor, cdf_factor)
+
+##########
+# CYTHON #
+##########
+
+# @boundscheck(False)
+# @wraparound(False)
+# cpdef c_one_step_roots_unsigned_derivative(
+#         double omega, double alpha, double beta,
+#         double[:] variances,
+#         double[:] next_variances,
+#         double[:] result):
+
+#     cdef:
+#         unsigned int i, n
+#     n = variances.size
+#     for i in range(n):
+#         result[i] = 0.5*(alpha*(
+#                 next_variances[i]-omega-beta*variances[i]))**-0.5

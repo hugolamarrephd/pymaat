@@ -9,8 +9,9 @@ import pymaat.testing as pt
 from pymaat.mathutil import voronoi_1d, inv_voronoi_1d
 from pymaat.nputil import diag_view
 
-from pymaat.garch.varquant import _QuantizerFactory, \
-    _Quantizer, _Unconstrained, MarginalVariance
+from pymaat.garch.varquant import _QuantizerFactory
+from pymaat.garch.varquant import _Quantizer
+from pymaat.garch.varquant import _Unconstrained
 
 
 @pytest.fixture(params=[1, 4],
@@ -61,70 +62,6 @@ def value(factory, previous, size):
 
 
 class TestFactory:
-
-    @pytest.fixture(params=[
-        (100, 100, 1.81753634548327519244801912973536e-13),
-        (1000, 1000, 1.82758229081871336437695944554397e-15),
-        ],
-        ids=[
-            "100x100",
-            ])
-    def setup(self, request):
-        return request.param
-
-    @pytest.fixture
-    def prev_size(self, setup):
-        return setup[0]
-
-    @pytest.fixture
-    def size(self, setup):
-        return setup[1]
-
-    @pytest.fixture
-    def optimal_distortion(self, setup):
-        return setup[2]
-
-    @pytest.fixture
-    def shape(self, size):
-        return (size,)
-
-    @pytest.fixture
-    def previous(self, prev_size, variance_scale):
-        from_ = 0.75 * variance_scale
-        to_ = 1.25 * variance_scale
-        value = np.linspace(from_, to_, num=prev_size)
-        probability = np.ones((prev_size,))/prev_size
-        return _QuantizerFactory.make_stub(
-            value=value, probability=probability)
-
-    @pytest.fixture
-    def factory(self, model, size, previous):
-        return _QuantizerFactory(model, size, previous)
-
-    @pytest.mark.slow
-    def test_optimal_distortion(self, factory, optimal_distortion):
-        quant = factory.optimize()
-        pt.assert_almost_equal(quant.distortion,
-                optimal_distortion,
-                rtol=1e-4)
-
-    @pytest.mark.slow
-    def test_far_inits_converge_to_same_result(
-            self, factory, shape, random_normal):
-        SEED = 987563
-        # x
-        init = 2.*random_normal
-        quant = factory.optimize(init=init, seed=SEED)
-        x1 = quant.x.copy()
-        # Minus x
-        init = -init
-        quant = factory.optimize(init=init, seed=SEED)
-        x2 = quant.x.copy()
-
-        pt.assert_almost_equal(x1, x2, rtol=1e-2)
-
-
-class TestFactoryWithBruteForce:
 
     def test__init__(self, model, factory, size, previous):
         assert factory.model is model
@@ -181,22 +118,52 @@ class TestFactoryWithBruteForce:
         pt.assert_almost_equal(factory.min_variance, expected)
 
     @pytest.mark.slow
-    def test_optimize_with_brute_force(self, factory, size):
-        quant = factory.optimize()
-        width = 1.5*np.max(np.absolute(quant.x))
-        ranges = (-width, width)
-        ranges = (ranges,)*size
-        expected = scipy.optimize.brute(
-            lambda x: factory.make_unconstrained(x).distortion,
-            ranges, full_output=True, disp=True
-        )
-        brute_x = expected[0]
-        # Same optimal value
-        pt.assert_almost_equal(quant.x, brute_x, rtol=1e-3)
-        # Decreased distortion by less or equal
-        brute_distortion = expected[1]
-        assert quant.distortion <= brute_distortion
+    def test_optimize(self, factory, size):
+        base_quant = factory.optimize()
+        robust_quant = factory.robust_optimize()
+        brute_quant = factory.brute_optimize()
+        # Same distortion
+        pt.assert_almost_equal(
+                base_quant.distortion,
+                brute_quant.distortion,
+                rtol=1e-4)
+        pt.assert_almost_equal(
+                robust_quant.distortion,
+                brute_quant.distortion,
+                rtol=1e-4)
+        # Same solution
+        pt.assert_almost_equal(
+                base_quant.x, brute_quant.x, rtol=1e-3)
+        pt.assert_almost_equal(
+                robust_quant.x, brute_quant.x, rtol=1e-3)
 
+    @pytest.mark.slow
+    def test_optimize_far_x0_converge_to_same_result(
+           self, factory, shape, random_normal):
+       # x
+       init = 2.*random_normal
+       quant = factory.optimize(x0=init)
+       x1 = quant.x.copy()
+       # Minus x
+       init = -init
+       quant = factory.optimize(x0=init)
+       x2 = quant.x.copy()
+
+       pt.assert_almost_equal(x1, x2, rtol=1e-2)
+
+    @pytest.mark.slow
+    def test_robust_optimize_far_x0_converge_to_same_result(
+           self, factory, shape, random_normal):
+       # x
+       init = 2.*random_normal
+       quant = factory.robust_optimize(x0=init, seed=12345)
+       x1 = quant.x.copy()
+       # Minus x
+       init = -init
+       quant = factory.robust_optimize(x0=init, seed=12345)
+       x2 = quant.x.copy()
+
+       pt.assert_almost_equal(x1, x2, rtol=1e-2)
 
 class TestQuantizer:
 

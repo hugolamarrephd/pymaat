@@ -1,5 +1,3 @@
-# All Marginal Garch Quantizers
-
 from functools import partial, wraps, lru_cache
 from abc import ABC, abstractmethod
 import collections
@@ -8,11 +6,11 @@ import numpy as np
 import scipy.optimize
 from scipy.stats import norm
 
+from pymaat.nputil import printoptions
 from pymaat.util import lazy_property
 from pymaat.mathutil import voronoi_1d
 
 class AbstractQuantization(ABC):
-
 
     def __init__(self, model, shape, first_quantizer):
         self.model = model
@@ -20,17 +18,33 @@ class AbstractQuantization(ABC):
         self.first_quantizer = first_quantizer
 
     def optimize(self, **kwargs):
+        if 'verbose' in kwargs:
+            verbose = kwargs['verbose']
+        else:
+            verbose = False
         current_quantizer = self.first_quantizer
         # Perform recursion
         self.all_quantizers = []
-        for s in self.shape:
+        for (t,s) in enumerate(self.shape):
+            if verbose:
+                header = "[t={0:d}] Searching for optimal quantizer".format(t)
+                print("\n" + ("#"*len(header)) + "\n")
+                print(header, end='')
             # Gather results from previous iteration...
             self.all_quantizers.append(current_quantizer)
             # Advance to next time step (computations done here...)
             current_quantizer = self._one_step_optimize(
                     s, current_quantizer, **kwargs)
+            if verbose:
+                print("\n[Optimal distortion]\n{0:.6e}".format(
+                    current_quantizer.distortion))
+                print("\n[Optimal quantizer (%/y)]")
+                with printoptions(precision=2, suppress=True):
+                    print(np.sqrt(252.*current_quantizer.value)*100.)
         # Handle last quantizer
         self.all_quantizers.append(current_quantizer)
+        if verbose:
+            print("\n" + ("#"*len(header)) + "\n")
         return self #for convenience
 
     @abstractmethod

@@ -2,18 +2,31 @@ from collections import namedtuple
 from hashlib import sha1
 import warnings
 from cachetools import LRUCache
+from functools import reduce
 
 import numpy as np
 from scipy.linalg import norm as infnorm
-from scipy.optimize import basinhopping
+from scipy.optimize import minimize, brute, basinhopping
 from scipy.stats import norm, truncnorm, uniform
-import matplotlib.pyplot as plot
+
+import matplotlib.pyplot as plt
+import matplotlib.cm
+import matplotlib.colors
+import matplotlib.colorbar
+import matplotlib.lines
 
 from pymaat.garch.quant import AbstractQuantization
 from pymaat.mathutil import voronoi_1d
 from pymaat.util import lazy_property
 from pymaat.nputil import diag_view, printoptions
 
+
+import math
+def norm_var(v):
+    return 100.*np.sqrt(252.*v)
+
+def round_to_int(x, base=1, fcn=round):
+    return int(base * fcn(float(x)/base))
 
 class MarginalVariance(AbstractQuantization):
 
@@ -26,86 +39,115 @@ class MarginalVariance(AbstractQuantization):
             first_probability)
         super().__init__(model, shape, first_quantizer)
 
-   # def get_markov_chain(self):
-   #      sizes = []
-   #      values = []
-   #      probabilities = []
-   #      transition_probabilities = []
-   #      for q in self.all_quantizers:
-   #          sizes.append(q.value.size)
-   #          values.append(q.value)
-   #          probabilities.append(q.probability)
-   #          transition_probabilities.append(q.transition_probability)
-   #      return MarkovChain(nper=len(q), ndim=1,
-   #              sizes=sizes,
-   #              values=values,
-   #              probabilities=probabilities,
-   #              transition_probabilities=transition_probabilities)
+    def plot_distortion(self):
+        all_quant = self.all_quantizers[1:]
+        y = [norm_var(np.sqrt(q.distortion)) for q in all_quant]
+        fig = plt.figure()
+        ax = fig.add_axes([0.1, 0.1, 0.9, 0.9])
+        ax.plot(np.arange(len(y))+1, np.array(y))
 
-    def visualize_all(self):
-        # cmap = matplotlib.cm.get_cmap('gnuplot2')
-        # cmap = matplotlib.colors.LinearSegmentedColormap(
-        #     'gnuplot2_reverse', matplotlib.cm.revcmap(cmap._segmentdata))
-        fig, ax = plt.subplots()
+    def plot_values(self):
+        fig = plt.figure()
+        main_ax = fig.add_axes([0.1,0.1,0.7,0.85])
 
-        for (t, q) in enumerate(self.all_quantizers):
-            x = np.broadcast_to(t+1, q.shape)
-            y = np.sqrt(252.*q.value)*100.
-            c = q.probability*100.
-            # Add scatter
-            cax = plt.scatter(x.flatten(), y.flatten(), c=c.flatten(),
-                              marker=",", cmap=cmap, s=ss)
 
-        plt.xlabel(r'Trading Days ($t$)')
-        plt.ylabel(r'Annualized Volatility (%)')
-        plt.xlim(1, t+1)
-        plt.xticks([1, 5, 10, 15, 20])
-        plt.yticks([10, 20, 30, 40])
+        all_quant = self.all_quantizers[1:]
+        all_vol = np.concatenate([norm_var(q.value) for q in all_quant])
+        all_probas = np.concatenate([100.*q.probability for q in all_quant])
+
+        def _get_bounds(values, lb=-np.inf, ub=np.inf):
+            lowest = max(lb, round_to_int(np.amin(values)*0.9,
+                base=5, fcn=math.floor))
+            highest = min(ub, round_to_int(np.amax(values)*1.1,
+                base=5, fcn=math.ceil))
+            return (lowest, highest)
+
+        vol_bounds = _get_bounds(all_vol, lb=0.)
+        proba_bounds = _get_bounds(all_probas, lb=0., ub=100.)
+
+        cmap = matplotlib.cm.get_cmap('gnuplot2')
+        cmap = cmap.reversed()
+        norm = matplotlib.colors.Normalize(vmin=proba_bounds[0],
+                vmax=proba_bounds[1])
+
+        # Main plot
+        for (t, quant) in enumerate(all_quant):
+            # Plot tiles
+            x_tiles = np.array([t+0.5, t+1.5])
+            y_tiles = norm_var(quant.voronoi)
+            y_tiles[0] = norm_var(quant.parent.min_variance)
+            y_tiles[-1] = vol_bounds[1]
+            x_tiles, y_tiles = np.meshgrid(x_tiles, y_tiles)
+            main_ax.pcolor(
+                    x_tiles, y_tiles,
+                    100.*quant.probability[:, np.newaxis],
+                    cmap=cmap, norm=norm)
+
+            # Plot singularities
+            for s in norm_var(quant.parent.singularities):
+                main_ax.plot(np.array([t+0.5, t+1.5]),
+                        np.array([s, s]), '-r', linewidth=1)
+            #  Plot quantizer
+            y_pts = norm_var(quant.value)
+            x_pts = np.broadcast_to(t+1, y_pts.shape)
+            main_ax.scatter(x_pts, y_pts, c='k', s=4, marker=".")
+
+        # Y-Axis
+        main_ax.set_ylabel(r'Annualized Volatility (%)')
+        main_ax.set_ylim(vol_bounds)
+        # X-Axis
+        main_ax.set_xlim(0.5, t+1.5)
+        main_ax.set_xlim(17.5, 21.5)
+        # main_ax.set_xlabel(r'Trading Days ($t$)')
+        # tickspace = round_to_int(0.1*t, base=5, fcn=math.ceil)
+        # ticks = np.arange(tickspace, t+1, tickspace)
+        # main_ax.xaxis.set_ticks(ticks)
+        # main_ax.xaxis.set_major_formatter(
+        #         matplotlib.ticker.FormatStrFormatter('%d'))
 
         # Add colorbar
-        cbar = fig.colorbar(cax)
-        cbar.ax.set_title(r'$p_{h}^{(i)}$(%)', fontsize=fs)
+        cbar_ax = fig.add_axes([0.85,0.1,0.05,0.85])
+        matplotlib.colorbar.ColorbarBase(
+                cbar_ax, cmap=cmap, norm=norm, orientation='vertical')
+        cbar_ax.set_ylabel(r'%')
 
-        fig.set_size_inches(4, 3)
-        ax.grid(True, linestyle='dashed', alpha=0.5, axis='y')
-        plt.tight_layout()
-        # plt.savefig('marginal_variance.eps', format='eps', dpi=1000)
+        return fig, main_ax, cbar_ax
 
     def visualize_transition(self, t=1):
-        if t == 0:
-            raise ValueError
-        x = np.sqrt(252.*mc.values[t])*100.
-        selected = np.logical_and(x > 10., x < 30.)
-        x = x[selected, np.newaxis]
-        y = np.sqrt(252.*mc.values[t+1])*100.
-        y = y[np.newaxis, selected]
-        c = mc.transition_probabilities[t]*100.
-        c = c[selected][:, selected]
-        x, y = np.broadcast_arrays(x, y)
+        pass
+        # if t == 0:
+        #     raise ValueError
+        # x = np.sqrt(252.*mc.values[t])*100.
+        # selected = np.logical_and(x > 10., x < 30.)
+        # x = x[selected, np.newaxis]
+        # y = np.sqrt(252.*mc.values[t+1])*100.
+        # y = y[np.newaxis, selected]
+        # c = mc.transition_probabilities[t]*100.
+        # c = c[selected][:, selected]
+        # x, y = np.broadcast_arrays(x, y)
 
-        fig, ax = plt.subplots()
+        # fig, ax = plt.subplots()
 
-        # Add scatter
-        cax = plt.scatter(x.flatten(), y.flatten(), c=c.flatten(),
-                          marker=",", cmap=cmap,
-                          s=ss, linewidths=0.15)
+        # # Add scatter
+        # cax = plt.scatter(x.flatten(), y.flatten(), c=c.flatten(),
+        #                   marker=",", cmap=cmap,
+        #                   s=ss, linewidths=0.15)
 
-        plt.xlabel(r'Annualized Volatility (%) at t=10', fontsize=fs)
-        plt.ylabel(r'Annualized Volatility (%) at t=11', fontsize=fs)
-        plt.xticks([10, 15, 20, 25, 30], fontsize=fs)
-        plt.yticks([10, 15, 20, 25, 30], fontsize=fs)
-        plt.xlim(10, 30)
-        plt.ylim(10, 30)
-        plt.tight_layout()
+        # plt.xlabel(r'Annualized Volatility (%) at t=10', fontsize=fs)
+        # plt.ylabel(r'Annualized Volatility (%) at t=11', fontsize=fs)
+        # plt.xticks([10, 15, 20, 25, 30], fontsize=fs)
+        # plt.yticks([10, 15, 20, 25, 30], fontsize=fs)
+        # plt.xlim(10, 30)
+        # plt.ylim(10, 30)
+        # plt.tight_layout()
 
-        # Add colorbar
-        cbar = fig.colorbar(cax)
-        cbar.ax.set_title(r'$p_{h}^{(ij)}$(%)', fontsize=fs)
+        # # Add colorbar
+        # cbar = fig.colorbar(cax)
+        # cbar.ax.set_title(r'$p_{h}^{(ij)}$(%)', fontsize=fs)
 
-        fig.set_size_inches(4, 3)
-        ax.grid(True, linestyle='dashed', alpha=0.5)
-        plt.tight_layout()
-        # plt.savefig('marginal_variance_transition.eps', format='eps', dpi=1000)
+        # fig.set_size_inches(4, 3)
+        # ax.grid(True, linestyle='dashed', alpha=0.5)
+        # plt.tight_layout()
 
     def quantize(self, t, values):
         pass
@@ -128,70 +170,124 @@ class MarginalVariance(AbstractQuantization):
         probability = probability/np.sum(probability)
         return _QuantizerFactory.make_stub(value, probability)
 
-    def _one_step_optimize(
-            self, size, previous, *, init=None):
-        return _QuantizerFactory(
-            self.model, size, previous).optimize(init)
-
+    def _one_step_optimize(self, size, previous, *, verbose=True):
+        factory = _QuantizerFactory(self.model, size, previous)
+        if previous.size == 1:
+            if verbose:
+                print(" using trust-region", end='')
+            quant = factory.optimize(verbose=verbose)
+        else:
+            if verbose:
+                print(" using Basin-Hopping", end='')
+            quant = factory.robust_optimize(verbose=verbose)
+        return quant
 
 class _QuantizerFactory:
 
     def __init__(self, model, size, previous):
+        if np.any(previous.probability <= 0.):
+            raise ValueError(
+                "Previous probabilities must be strictly positive")
         self.model = model
         self.shape = (size,)
         self.size = size
         self.previous = previous
+        self.variance_span = max(
+            self.previous.value[-1]/self.min_variance-1., 1.)
         self._cache = LRUCache(maxsize=30)
-        if np.any(self.previous.probability <= 0.):
-            raise ValueError(
-                "Previous probabilities must be strictly positive")
+        self._func = lambda x: self.make_unconstrained(x).distortion
+        self._jac = lambda x: self.make_unconstrained(x).gradient
+        self._hess = lambda x: self.make_unconstrained(x).hessian
+        self._dist_scale = (
+                self.min_variance**2./(self.previous.size*self.size**2.)
+                )
+        self._gtol = self._dist_scale * 1e-4
+        self._method = 'trust-ncg'
+        self._options = {
+            'maxiter': 10000,
+            'disp': False,
+            'gtol': self._gtol} #  when using trust-ncg
 
-    def optimize(self, *, niter=1000, seed=None, init=None, verbose=True):
-        self._T = self.min_variance**2./(self.previous.size*self.size**2.)
-        self._tol = self._T*1e-6
-        if init is None:
-            init = np.zeros(self.size)
-
-        def func(x): return self.make_unconstrained(x).distortion
-        self.take_step = _OptimizerTakeStep(self, seed)
-        # Set up convex optimizer...
-
-        def jac(x): return self.make_unconstrained(x).gradient
-
-        def hess(x): return self.make_unconstrained(x).hessian
-        options = {'maxiter': 1000, 'disp': False, 'gtol': self._tol}
-        minimizer_kwargs = {
-            'method': 'trust-ncg',
-            'jac': jac,
-            'hess': hess,
-            'options': options
-        }
+    def optimize(self, *, x0=None, verbose=True):
+        """
+        Typical quantizer solver. Might stall on a local minimum.
+        """
         if verbose:
-            callback = self._print_callback
+            print(" with gtol={0:.6e}".format(self._gtol))
+
+        def optimize_from(x0_): return minimize(
+            self._func, x0_, method=self._method,
+            jac=self._jac, hess=self._hess,
+            options=self._options,
+            callback=self._get_callback(verbose)
+        )
+        return self._try_optimization(optimize_from, x0)
+
+    def robust_optimize(
+            self, *,
+            niter=1000, niter_success=10, interval=50,
+            seed=None, x0=None, verbose=True
+            ):
+        """
+        Use for large quantizers.
+        """
+        if niter_success is None:
+            self._niter_success = niter+2
         else:
-            def callback(x, f, a): return None
+            self._niter_success = niter_success
+        if verbose:
+            msg = " with gtol={0:.6e}".format(self._gtol)
+            msg += ", niter={0:d}".format(niter)
+            msg += ", niter_success={0:d}".format(self._niter_success)
+            msg += " and interval={0:d}".format(interval)
+            print(msg)
+        minimizer_kwargs = {
+            'method': self._method,
+            'jac': self._jac,
+            'hess': self._hess,
+            'options': self._options
+        }
+        def optimize_from(x0_): return basinhopping(
+            self._func, x0_, niter=niter, T=self._dist_scale,
+            take_step=_OptimizerTakeStep(self, seed=seed, persistent=False),
+            disp=False,
+            minimizer_kwargs=minimizer_kwargs,
+            callback=self._get_callback(verbose),
+            interval=interval,
+        )
+        return self._try_optimization(optimize_from, x0)
+
+    def _try_optimization(self, optimize_from, x0=None):
+        if x0 is None:
+            if self.size == self.previous.size:
+                # Start from previous values...
+                x0 = _Unconstrained._inv_change_of_variable(
+                        self, self.previous.value)
+            else:
+                x0 = np.zeros(self.shape)
         try:
-            opt = basinhopping(
-                func,
-                init,
-                niter=niter,
-                T=self._T,
-                take_step=self.take_step,
-                disp=False,
-                minimizer_kwargs=minimizer_kwargs,
-                callback=callback,
-                niter_success=100
-            )
+            opt = optimize_from(x0)
         except _AtSingularity as exc:
             # Optimizer met a singularity for indices idx
-            init[exc.idx] += 1e-2
-            if verbose:
-                print("Singularity failure: re-booting optimizer\n")
-            return self.optimize(
-                niter=niter, seed=seed, init=init, verbose=verbose)
+            # Move by arbitrary displacement
+            x0[exc.idx] += 1e-2
+            return self._try_optimization(optimize_from, x0)
         return self.make_unconstrained(opt.x)
 
-    def _print_callback(self, x, f, accept):
+    def brute_optimize(self, search_width=3.):
+        """
+        Solve quantizer by brute force. Recommended use: only when size<=3.
+        """
+        ranges = ((-search_width, search_width),)*self.size
+        sol = brute(self._func, ranges)
+        return self.make_unconstrained(sol)
+
+    def _get_callback(self, verbose):
+        def cb(x, f=None, a=None):
+            return self._callback(x, verbose)
+        return cb
+
+    def _callback(self, x, verbose):
         q = self.make_unconstrained(x)
 
         # Initialization
@@ -200,26 +296,38 @@ class _QuantizerFactory:
             self._value = q.value
             self._niter = 0
 
-        if q.distortion < self._distortion:
-            objective = 100.*(q.distortion/self._distortion-1.)
-            msg = "\n[#{0:d}] ".format(self._niter)
-            msg += "New Global Optimum"
-            msg += " {0:+.2f}% from global {1:.4e}\n".format(
-                objective, self._distortion)
-            msg += "\tDistortion: {0:.32e}\n".format(q.distortion)
-            msg += "\tStepsize: {0:.2f}\n".format(self.take_step.stepsize)
-            msg += "\tGradient (tol): {0:.4e} ({1:.4e})\n".format(
-                infnorm(q.gradient), self._tol)
-            change = 100.*np.amax(np.absolute(q.value/self._value-1.))
-            msg += "\tDelta-Quantizer: {0:.2f}%\n".format(change)
-            msg += "\tQuantizer(%\y):"
-            print(msg)
-            with printoptions(precision=2):
-                print("\t{}".format(np.sqrt(252.*q.value)*100.))
+        # If improve by at least 0.01%...
+        if self._niter == 0 or q.distortion*(1.+1e-4) < self._distortion:
+            if verbose:
+                objective = 100.*(q.distortion/self._distortion-1.)
+                value = 100.*np.amax(np.absolute(q.value/self._value-1.))
+                msg = "[Iter#{0:d}] ".format(self._niter)
+                if self._niter > 0:
+                    msg += "New minimum [df={0:+.2f}%, dx={1:.2f}%] ".format(
+                        objective, value)
+                msg += "Distortion: {0:.6e}, ".format(q.distortion)
+                msg += "Gradient: {0:.6e}".format(infnorm(q.gradient))
+                print(msg)
+            # Update
+            self._niter_since_last = 0
             self._distortion = q.distortion
             self._value = q.value
+        else:
+            self._niter_since_last += 1
 
         self._niter += 1
+
+        if hasattr(self, '_niter_success'):
+            # Stop flag only used when using basin-hopping
+            stop_flag = self._niter_since_last >= self._niter_success
+            if verbose and stop_flag:
+                msg = "Early termination: could not improve for "
+                msg += "{0:d} consecutive tries".format(
+                        self._niter_since_last)
+                print(msg)
+            return stop_flag
+        else:
+            return None
 
     def make_unconstrained(self, x):
         x.flags.writeable = False
@@ -261,8 +369,10 @@ class _QuantizerFactory:
 
     @lazy_property
     def min_variance(self):
-        return self.model.get_lowest_one_step_variance(
+        out = self.model.get_lowest_one_step_variance(
             np.amin(self.previous.value))
+        # print(np.sqrt(252.*out)*100.)
+        return out
 
     @lazy_property
     def singularities(self):
@@ -273,53 +383,64 @@ class _QuantizerFactory:
 
 class _OptimizerTakeStep():
 
-    def __init__(self, parent, seed=None):
-        if seed is not None:
-            self.random_state = np.random.RandomState(seed)
-        else:
-            self.random_state = np.random.RandomState()
+    def __init__(self, parent, seed=None, persistent=False):
+        self.random_state = np.random.RandomState(seed)
         self.parent = parent
         self.stepsize = 1.
+        self.persistent = persistent
         if self.parent.previous.size > 1:
             self.scale = np.mean(np.diff(self.parent.singularities))
         else:
-            raise ValueError
+            self.scale = self.parent.min_variance/self.parent.size
 
     def __call__(self, x):
-        _, old_value = _Unconstrained._change_of_variable(self.parent, x)
-        new_value = old_value.copy()
-        new_value = self._make_forward_pass(new_value)
-        new_x = _Unconstrained._inv_change_of_variable(
-            self.parent, new_value)
+        # Search bounds
+        lb = self.parent.min_variance
+        ub = self.parent.singularities[-1] + self.scale
+        if self.persistent:
+            value = self._persistent(self.stepsize, lb, ub, x)
+        else:
+            value = self._non_persistent(lb, ub)
+        new_x = _Unconstrained._inv_change_of_variable(self.parent, value)
         # Bound x to avoid numerical instability
         return np.clip(new_x, -10., 20.)
 
-    def _make_forward_pass(self, value):
-        lb = self.parent.singularities[0]
-        ub = value[-1]
+    def _persistent(self, step, lb, ub, x):
+        _, value = _Unconstrained._change_of_variable(self.parent, x)
+        scale_ = 0.5*step*self.scale
         for i in range(value.size):
-            loc = value[i]
-            scale = self.stepsize*self.scale
-            a_ = (lb-loc)/scale
-            b_ = (ub-loc)/scale
+            # Compute truncated normal parameters
+            loc_ = value[i]
+            a_ = (lb-loc_)/scale_
+            b_ = (ub-loc_)/scale_
+            # Simulate
             tmp = truncnorm.rvs(
-                a_, b_,
-                loc=loc, scale=scale,
+                a_, b_, loc=loc_, scale=scale_,
                 random_state=self.random_state)
+            # Check simulation consistency
             if not (tmp > lb and tmp < ub):
-                # Fail-safe if numerical instability arises
-                value[i:] = uniform(
-                    lb, ub,
+                # Fail-safe if numerical instability detected (eg. NaNs)
+                # More likely to happen for large step sizes
+                tmp = uniform.rvs(lb, ub-lb,
                     size=value[i:].shape,
                     random_state=self.random_state)
+                tmp.sort()
+                value[i:] = tmp
                 msg = "Take-step failsafe: numerical instability "
-                msg += " [stepsize={.2f}]".format(self.stepsize)
+                msg += " [stepsize={0:.2f}]".format(step)
                 warnings.warn(msg, UserWarning)
                 break
             else:
+                # Commit new value and update lower bound
                 lb = value[i] = tmp
         return value
 
+    def _non_persistent(self, lb, ub):
+        value = uniform.rvs(
+                lb, ub-lb, size=self.parent.shape,
+                random_state=self.random_state)
+        value.sort()
+        return value
 
 class _Quantizer():
 
@@ -536,6 +657,24 @@ class _AtSingularity(Exception):
         self.idx = np.unique(idx)
 
 
+# class _UnconstrainedNaive(_Quantizer):
+#     def __init__(self, parent, x):
+#         if not isinstance(parent, _QuantizerFactory):
+#             msg = 'Quantizers must be instantiated from valid factory'
+#             raise ValueError(msg)
+#         x = np.asarray(x)
+#         self.x = x
+#         if parent.size == parent.previous.size:
+#             value = parent.previous.value + self.x
+#         else:
+#             value = np.linspace(
+#                     parent.min_variance,
+#                     parent.previous.value[-1],
+#                     num=parent.size) + self.x
+#         value.sort()
+#         # Let super catch invalid value...
+#         super().__init__(parent, value)
+
 class _Unconstrained(_Quantizer):
 
     def __init__(self, parent, x):
@@ -544,14 +683,14 @@ class _Unconstrained(_Quantizer):
             raise ValueError(msg)
         x = np.asarray(x)
         self.x = x
-        self.min_variance = parent.min_variance
         self._scaled_exp_x, value = self._change_of_variable(parent, x)
         # Let super catch invalid value...
         super().__init__(parent, value)
 
     @staticmethod
     def _change_of_variable(parent, x):
-        scaled_exp_x = np.exp(x)*parent.min_variance / (parent.size+1.)
+        scaled_exp_x = (parent.variance_span * parent.min_variance
+                        * np.exp(x) / (parent.size+1.))
         value = (parent.min_variance + np.cumsum(scaled_exp_x))
         return (scaled_exp_x, value)
 
@@ -559,7 +698,8 @@ class _Unconstrained(_Quantizer):
     def _inv_change_of_variable(parent, value):
         padded_values = np.insert(value, 0, parent.min_variance)
         expx = (
-            (parent.size+1.)*np.diff(padded_values)/parent.min_variance
+            (parent.size+1.)*np.diff(padded_values)
+            / (parent.min_variance * parent.variance_span)
         )
         return np.log(expx)
 
@@ -594,6 +734,7 @@ class _Unconstrained(_Quantizer):
             return np.diag(self._scaled_exp_x * inv_cum_grad)
 
         hess = get_first_term() + get_second_term()
+
         return hess
 
     @property

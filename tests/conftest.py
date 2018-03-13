@@ -2,10 +2,6 @@ import pytest
 
 SEED = 12334567
 
-# @pytest.fixture(params=[np.float_,np.int_,np.bool_], scope='function')
-# def dtype(request):
-#     return request.param
-
 @pytest.fixture(scope='function')
 def random(shape, dtype):
     import numpy as np

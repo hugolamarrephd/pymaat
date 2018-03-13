@@ -1,11 +1,16 @@
-import os
+import os, sys, subprocess
 from setuptools import setup, find_packages
 from Cython.Build import cythonize
+import Cython.Compiler.Options
+Cython.Compiler.Options.annotate = True
 
 def read(fname):
     return open(os.path.join(os.path.dirname(__file__), fname)).read()
 
-extensions = ['pymaat/garch/spec/*_core.pyx',]
+# All directories containing Cython code
+extensions_dir = ['pymaat/garch/spec/',]
+
+args = sys.argv[1:]
 
 setup(
         name="pymaat",
@@ -40,6 +45,21 @@ setup(
                 'matplotlib',
                 'cachetools'
             ],
-        ext_modules=cythonize(extensions),
+        ext_modules=cythonize([x + '*.pyx' for x in extensions_dir]),
     )
 
+# Clean
+if "clean" in args:
+    subprocess.Popen("rm -rf prof/",
+            shell=True, executable="/bin/bash")
+    subprocess.Popen("rm -rf htmlcov/",
+            shell=True, executable="/bin/bash")
+    subprocess.Popen("rm -rf build/",
+            shell=True, executable="/bin/bash")
+    for x in extensions_dir:
+        subprocess.Popen("rm " + x + "*.html",
+                shell=True, executable="/bin/bash")
+        subprocess.Popen("rm " + x + "*.c",
+                shell=True, executable="/bin/bash")
+        subprocess.Popen("rm " + x + "*.so",
+                shell=True, executable="/bin/bash")

@@ -10,18 +10,21 @@ def get_garch_factory(retype='', vartype='hngarch'):
     #TODO
     pass
 
+class AbstractOneLagReturn(ABC):
+
+     @abstractmethod
+     def one_step_generate(self, innovations, variances, volatilities):
+         pass
+
+     @abstractmethod
+     def one_step_filter(self, returns, variances, volatilities):
+         pass
+
 class AbstractOneLagGarch(ABC):
 
-    # TODO: send to return specification
-    @abstractmethod
-    def _one_step_return_equation(self, innovations, variances, volatilities):
-        pass
+    def __init__(self, retspec):
+        self.retspec = retspec
 
-    @abstractmethod
-    def _one_step_innovation_equation(self, returns, variances, volatilities):
-        pass
-
-    # TODO: send to variance specification
     @abstractmethod
     def _one_step_equation(self, innovations, variances, volatilities):
         pass
@@ -101,7 +104,7 @@ class AbstractOneLagGarch(ABC):
     @method_decorator(elbyel)
     def one_step_filter(self, returns, variances):
         volatilities = np.sqrt(variances)
-        innovations = self._one_step_innovation_equation(returns,
+        innovations = self.retspec.one_step_filter(returns,
                 variances, volatilities)
         next_variances = self._one_step_equation(innovations,
                 variances, volatilities)
@@ -110,7 +113,7 @@ class AbstractOneLagGarch(ABC):
     @method_decorator(elbyel)
     def one_step_generate(self, innovations, variances):
         volatilities = np.sqrt(variances)
-        returns = self._one_step_return_equation(innovations,
+        returns = self.retspec.one_step_generate(innovations,
                 variances, volatilities)
         next_variances = self._one_step_equation(innovations,
                 variances, volatilities)

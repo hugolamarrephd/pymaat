@@ -5,6 +5,8 @@ import numpy as np
 
 from pymaat.util import PymaatException
 
+DEBUG = False
+
 #################
 # Special Views #
 #################
@@ -97,7 +99,10 @@ def elbyel(function):
     old_function = function
     function = atleast_1d(function)
     function = handle_scalar_input(function)
-    return wraps(old_function)(function)
+    if DEBUG:
+        return wraps(old_function)(function)
+    else:
+        return function
 
 def forced_elbyel(function):
     '''
@@ -109,7 +114,10 @@ def forced_elbyel(function):
     old_function = function
     function = broadcast(function)
     function = handle_scalar_input(function)
-    return wraps(old_function)(function)
+    if DEBUG:
+        return wraps(old_function)(function)
+    else:
+        return function
 
 def atleast_1d(function):
     '''
@@ -121,7 +129,6 @@ def atleast_1d(function):
         In particular, function body may rely on assignments, indexing
         and broadcasting --- even if scalar inputs are provided by user.
     '''
-    @wraps(function)
     def wrapper(*args, **kargs):
         old_args = args
         args = []
@@ -130,7 +137,10 @@ def atleast_1d(function):
             args.append(np.atleast_1d(np.asanyarray(a)))
         # Call wrapped function with new arguments
         return function(*args, **kargs)
-    return wrapper
+    if DEBUG:
+        return wraps(function)(wrapper)
+    else:
+        return wrapper
 
 def broadcast(function):
     '''
@@ -143,13 +153,15 @@ def broadcast(function):
     Rem. Preserve array subclasses (eg. np.ma.array)
         by calling `np.asanyarray`
     '''
-    @wraps(function)
     def wrapper(*args, **kargs):
         # Broadcast all arguments
         *args, = np.broadcast_arrays(*args)
         # Call wrapped function with new arguments
         return function(*args, **kargs)
-    return wrapper
+    if DEBUG:
+        return wraps(function)(wrapper)
+    else:
+        return wrapper
 
 def handle_scalar_input(function):
     '''
@@ -161,7 +173,6 @@ def handle_scalar_input(function):
     Rem. Outputted scalars are not of native types.
         In particular, outputs are np.float64, not built-in float.
     '''
-    @wraps(function)
     def wrapper(*args, **kargs):
         # Determine if scalar mode
         scalar = True
@@ -191,8 +202,10 @@ def handle_scalar_input(function):
                 outputs = outputs[0]
 
         return outputs
-
-    return wrapper
+    if DEBUG:
+        return wraps(function)(wrapper)
+    else:
+        return wrapper
 
 def workon_axis(function):
     '''
@@ -211,7 +224,6 @@ def workon_axis(function):
     Rem. Other keyword arguments (besides `axis`) are left untouched.
     '''
 
-    @wraps(function)
     def wrapper(*args, **kargs):
 
         if 'axis' not in kargs:
@@ -241,8 +253,11 @@ def workon_axis(function):
             return new_outputs
         else:
             return new_outputs[0]
-
-    return atleast_1d(wrapper)
+    wrapper = atleast_1d(wrapper)
+    if DEBUG:
+        return wraps(function)(wrapper)
+    else:
+        return wrapper
 
 
 ############
