@@ -21,27 +21,27 @@ class HestonNandiGarch(AbstractOneLagGarch):
             raise ValueError
 
 
-    def _one_step_equation(self, innovations, variances, volatilities):
+    def _equation(self, innovations, variances, volatilities):
         """
          ` h_{t+1} = omega + beta*h_{t} + alpha*(z_t-gamma*sqrt(h_{t}))^2`
         """
         return (self.omega + self.beta*variances
                 + self.alpha*np.power(innovations-self.gamma*volatilities,2))
 
-    def _get_one_step_roots(self, variances, next_variances):
+    def _real_roots(self, variances, next_variances):
         discr = (next_variances-self.omega-self.beta*variances)/self.alpha
         const = self.gamma * np.sqrt(variances)
-        with np.errstate(invalid='ignore'):
-            roots = [const + (pm * discr**0.5) for pm in [-1., 1.]]
-        return roots
+        sqrtdiscr = np.maximum(discr, 0.)**0.5 # Real part only
+        return [const + (pm * sqrtdiscr) for pm in [-1., 1.]]
 
-    def _get_one_step_roots_unsigned_derivative(self,
-            variances, next_variances):
-        with np.errstate(invalid='ignore', divide='ignore'):
-            return 0.5*(self.alpha*(
-                next_variances-self.omega-self.beta*variances))**-0.5
+    def _real_roots_unsigned_derivative(self, variances, next_variances):
+        discr = next_variances-self.omega-self.beta*variances
+        sqrtdiscr = (self.alpha*np.maximum(discr, 0.))**0.5 # Real part only
+        out = np.zeros_like(sqrtdiscr)
+        out[sqrtdiscr>0.] = 0.5 / sqrtdiscr[sqrtdiscr>0.]
+        return out
 
-    def _get_one_step_first_order_expectation_factors(self,
+    def _first_order_expectation_factors(self,
             variances, innovations):
         # PDF
         with np.errstate(invalid='ignore'):
@@ -53,7 +53,7 @@ class HestonNandiGarch(AbstractOneLagGarch):
                 + (self.beta+self.alpha*self.gamma**2) * variances)
         return (pdf_factor, cdf_factor)
 
-    def _get_one_step_second_order_expectation_factors(self,
+    def _second_order_expectation_factors(self,
             variances, innovations):
         # Preliminary computations
         gamma_vol = self.gamma*variances**0.5

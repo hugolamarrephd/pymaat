@@ -17,10 +17,8 @@ def test_marginal_variance_quantization():
         beta=0.79,
         gamma=196.21)
     # Instantiate the quantization from a model
-    size = np.concatenate([
-            10*np.ones((21,), dtype=np.int_),
-            ])
-    quantization = MarginalVariance(model, 0.18**2./252., size=size)
+    quantization = MarginalVariance(model, 0.18**2./252.,
+            size=25, nper=21)
     quantization.optimize(verbose=True) # Do computations
     # Visualize the quantization
     quantization.plot_distortion() # Plot result
@@ -31,37 +29,7 @@ def test_marginal_variance_quantization():
     plt.savefig(
             os.path.expanduser('~/marg_var_val.eps'),
             format='eps', dpi=1000)
-    # fig.set_size_inches(4, 3)
-    # quantization.visualize_transition_at(t=15)
-
-
-# class TestMarginalVariance:
-
-#     @pytest.fixture(scope='class')
-#     def shape(self):
-#         return (10,1)
-
-#     @pytest.fixture(scope='class')
-#     def nper(self):
-#         return 21
-
-#     @pytest.fixture(scope='class')
-#     def quantization(self, model, variance_scale, shape, nper):
-#         return MarginalVariance(model, variance_scale, shape[0], nper=nper)
-
-#     @pytest.fixture(scope='class')
-#     def quantizers(self, quantization):
-#         quantization.optimize()
-#         return quantization.all_quantizers[1:]
-
-#     def test_distortion(self, quantizers):
-#         for q in quantizers:
-#             print(q.distortion)
-# pytest.main(__file__)
-        # print(
-        #         np.sqrt(
-        #             np.concatenate(
-        #                 last1[:,np.newaixs],last2[:,np.newaxis],axis=1
-        #                 )
-        #             *252.)
-        #         )
+    quantization.plot_transition_at(t=15)
+    plt.savefig(
+            os.path.expanduser('~/marg_var_trans.eps'),
+            format='eps', dpi=1000)

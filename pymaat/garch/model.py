@@ -26,25 +26,25 @@ class AbstractOneLagGarch(ABC):
         self.retspec = retspec
 
     @abstractmethod
-    def _one_step_equation(self, innovations, variances, volatilities):
+    def _equation(self, innovations, variances, volatilities):
         pass
 
     @abstractmethod
-    def _get_one_step_roots(self, variances, next_variances):
+    def _real_roots(self, variances, next_variances):
         pass
 
     @abstractmethod
-    def _get_one_step_roots_unsigned_derivative(self,
+    def _real_roots_unsigned_derivative(self,
             variances, next_variances):
         pass
 
     @abstractmethod
-    def _get_one_step_first_order_expectation_factors(self,
+    def _first_order_expectation_factors(self,
             variances, innovations):
         pass
 
     @abstractmethod
-    def _get_one_step_second_order_expectation_factors(self,
+    def _second_order_expectation_factors(self,
             variances, innovations):
         pass
 
@@ -106,7 +106,7 @@ class AbstractOneLagGarch(ABC):
         volatilities = np.sqrt(variances)
         innovations = self.retspec.one_step_filter(returns,
                 variances, volatilities)
-        next_variances = self._one_step_equation(innovations,
+        next_variances = self._equation(innovations,
                 variances, volatilities)
         return (next_variances, innovations)
 
@@ -115,38 +115,31 @@ class AbstractOneLagGarch(ABC):
         volatilities = np.sqrt(variances)
         returns = self.retspec.one_step_generate(innovations,
                 variances, volatilities)
-        next_variances = self._one_step_equation(innovations,
+        next_variances = self._equation(innovations,
                 variances, volatilities)
         return (next_variances,returns)
 
     @method_decorator(elbyel)
-    def one_step_roots(self, variances, next_variances):
-        limit_index = next_variances==np.inf
-        # Complex roots are silently converted to NaNs.
-        # For masked arrays, factor = np.inf gets automatically
-        #    masked here
-        roots = self._get_one_step_roots(variances, next_variances)
-        # Handle limit case explicitly to support masked arrays
-        limit_index = np.broadcast_to(limit_index, roots[0].shape)
+    def one_step_real_roots(self, variances, next_variances):
+        roots = self._real_roots(variances, next_variances)
+        # Limit cases
+        limit_index = np.broadcast_to(
+                next_variances==np.inf, roots[0].shape)
         roots[0][limit_index] = -np.inf
         roots[1][limit_index] = np.inf
         # Output tuple
         return tuple(roots)
 
     @method_decorator(elbyel)
-    def one_step_roots_unsigned_derivative(self, variances, next_variances):
-        discr = next_variances-self.get_lowest_one_step_variance(variances)
-        # Register limit cases
-        limit_cases = {0.:next_variances==np.inf, np.inf:discr==0.}
-        # Complex roots and division by zero
-        #   are silently converted to NaNs.
-        # For masked arrays, factor = 0. *and* np.inf may
-        #   get automatically masked
-        der = self._get_one_step_roots_unsigned_derivative(
-                variances, next_variances)
-        # Handle limit case explicitly to support masked arrays
-        for lim, index in limit_cases.items():
-            der[np.broadcast_to(index, der.shape)] = lim
+    def one_step_real_roots_unsigned_derivative(
+            self, variances, next_variances):
+        # Warning: returns zero at singularity
+        #    although the theoritical value is inf
+        der = self._real_roots_unsigned_derivative(variances, next_variances)
+        # Limit cases
+        limit_index = np.broadcast_to(
+                next_variances==np.inf, der.shape)
+        der[limit_index] = 0.
         return der
 
     @method_decorator(elbyel)
@@ -155,7 +148,7 @@ class AbstractOneLagGarch(ABC):
         """
         Integrate
             ```
-            (_one_step_equation(z)**order)*gaussian_pdf(z)*dz
+            (_equation(z)**order)*gaussian_pdf(z)*dz
             ```
         from -infty until innovations.
         Rem. _pdf and _cdf are used internally for efficiency.
@@ -164,11 +157,11 @@ class AbstractOneLagGarch(ABC):
             _pdf = norm.pdf(innovations)
         if _cdf is None:
             _cdf = norm.cdf(innovations)
-        pdf_factor, cdf_factor = self._get_one_step_expectation_factors(
+        pdf_factor, cdf_factor = self._expectation_factors(
                         variances, innovations, order=order)
         return pdf_factor*_pdf + cdf_factor*_cdf
 
-    def _get_one_step_expectation_factors(self, variances, innovations, *,
+    def _expectation_factors(self, variances, innovations, *,
             order=0):
         # Limit cases (innovations = +- infinity)
         #   PDF has exponential decrease towards zero that overwhelms
@@ -180,11 +173,11 @@ class AbstractOneLagGarch(ABC):
             cdf_factor = np.ones_like(variances)
         elif order==1:
             (pdf_factor, cdf_factor) = \
-                    self._get_one_step_first_order_expectation_factors(
+                    self._first_order_expectation_factors(
                     variances, innovations)
         elif order==2:
             (pdf_factor, cdf_factor) = \
-                    self._get_one_step_second_order_expectation_factors(
+                    self._second_order_expectation_factors(
                     variances, innovations)
         else:
             raise ValueError('Only supports order 0,1 and 2.')
