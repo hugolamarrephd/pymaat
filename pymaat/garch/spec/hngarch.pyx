@@ -41,7 +41,7 @@ class HestonNandiGarch(AbstractOneLagGarch):
         out[sqrtdiscr>0.] = 0.5 / sqrtdiscr[sqrtdiscr>0.]
         return out
 
-    def _first_order_expectation_factors(self,
+    def _first_order_integral_factors(self,
             variances, innovations):
         # PDF
         with np.errstate(invalid='ignore'):
@@ -53,7 +53,7 @@ class HestonNandiGarch(AbstractOneLagGarch):
                 + (self.beta+self.alpha*self.gamma**2) * variances)
         return (pdf_factor, cdf_factor)
 
-    def _second_order_expectation_factors(self,
+    def _second_order_integral_factors(self,
             variances, innovations):
         # Preliminary computations
         gamma_vol = self.gamma*variances**0.5

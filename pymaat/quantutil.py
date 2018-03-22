@@ -6,55 +6,52 @@ import warnings
 import numpy as np
 from scipy.linalg import norm as infnorm
 from scipy.optimize import minimize, brute, basinhopping
-from scipy.stats import norm, truncnorm, uniform
+from scipy.stats import norm, uniform
 
 from pymaat.util import lazy_property
-from pymaat.nputil import workon_axis, diag_view
+from pymaat.nputil import workon_axis, diag_view, printoptions
 
-class AbstractQuantization(ABC):
+class AbstractCore(ABC):
 
-    def __init__(self, model, print_formatter):
+    print_formatter = lambda value: value
+
+    def __init__(self, model):
         self.model = model
-        self.print_formatter = print_formatter
 
-    def optimize(self, *, verbose=False):
+    def optimize(self, *, verbose=False, fast=False):
         # Initialize recursion
-        current_quantizer = self._make_first_quantizer()
+        current_quantizer = self._make_first_quant()
 
         # Perform recursion
-        self.all_quantizers = []
+        self.all_quant = []
         for (t, s) in enumerate(self._get_all_shapes()):
             if verbose:
                 header = "[t={0:d}] ".format(t)
                 header += " Searching for optimal quantizer"
                 sep = "\n" + ("#"*len(header)) + "\n"
                 print(sep)
-                print(header, end='')
+                print(header)
             # Gather results from previous iteration...
-            self.all_quantizers.append(current_quantizer)
+            self.all_quant.append(current_quantizer)
             # Advance to next time step (computations done here...)
             current_quantizer = self._one_step_optimize(
-                s, current_quantizer, verbose=verbose)
+                s, current_quantizer, verbose=verbose, fast=fast)
             if verbose:
-                # Display results
-                print("\n[Optimal distortion]\n{0:.6e}".format(
-                    quant.distortion))
                 print("\n[Optimal quantizer (%/y)]")
                 with printoptions(precision=2, suppress=True):
-                    print(self.print_formatter(quant.value))
+                    print(self.print_formatter(current_quantizer.value))
                 print(sep)
 
         # Handle last quantizer
-        self.all_quantizers.append(current_quantizer)
+        self.all_quant.append(current_quantizer)
 
         return self  # for convenience
 
-    @abstractmethod
     def quantize(self, t, values):
-        pass
+        return self.all_quant[t].quantize(values)
 
     @abstractmethod
-    def _make_first_quantizer(self):
+    def _make_first_quant(self):
         pass
 
     @abstractmethod
@@ -62,91 +59,178 @@ class AbstractQuantization(ABC):
         pass
 
     @abstractmethod
-    def _one_step_optimize(self, shape, previous, *, verbose=False):
+    def _one_step_optimize(self, shape, previous, *,
+            verbose=False, fast=False):
         pass
 
-class AbstractFactory(ABC):
-    cache_size = 30
+class AbstractQuantization(ABC):
 
-    def __init__(self, model, size, previous, target):
-        if np.any(previous.probability <= 0.):
-            raise ValueError(
-                "Previous probabilities must be strictly positive")
+    @abstractmethod
+    def quantize(self, value):
+        pass
+
+class AbstractFactory1D(ABC):
+    CACHE_SIZE = 30
+
+    def __init__(
+            self, model, size, unc_flag, *,
+            voronoi_bounds, prev_proba, min_value, scale_value,
+            singularities=np.array([])):
         self.model = model
         self.ndim = 1
         self.size = size
         self.shape = (size,)
-        self.previous = previous
-        self.target = target
+        self.unc_flag = unc_flag  # Unconstrained flag
+        # Voronoi bounds
+        self.voronoi_bounds = voronoi_bounds
+        # For change of variable...
+        self.min_value = min_value
+        self.scale_value = scale_value
+        # For random searches...
+        self.singularities = np.unique(singularities)
+
+        # Previous quantizer properties
+        self.prev_proba = prev_proba
+        self.prev_ndim = prev_proba.ndim
+        self.prev_size = prev_proba.size
+        self.prev_shape = prev_proba.shape
 
         # Setting up internal state..
-        self.cache = LRUCache(maxsize=self.cache_size)
+        self.cache = LRUCache(maxsize=self.CACHE_SIZE)
+        self.distortion_scale = (self.scale_value**2.
+                /(self.prev_size*self.size**2.))
 
-    @abstractmethod
-    def get_distortion_scale(self):
-        pass
+    def clear(self):
+        self.cache.clear()
 
     def make(self, x):
         x.flags.writeable = False
         key = sha1(x).hexdigest()
         if key not in self.cache:
-            quant = self.target(self, x)
+            if self.unc_flag:  # Unconstrained
+                quant = _Unconstrained1D(self, self.target, x)
+            else:  # Straight-up quantizer
+                quant = self.target(self, x)
             self.cache[key] = quant
         return self.cache.get(key)
 
-class AbstractQuantizer(ABC):
+    def change_of_variable(self, x):
+        scaled_expx = self.scale_value*np.exp(x)/(self.size+1.)
+        return self.min_value+np.cumsum(scaled_expx)
 
-    def __init__(self, parent, value, *, lb=-np.inf, ub=np.inf):
-        if not isinstance(parent, AbstractFactory):
+    def inv_change_of_variable(self, value):
+        padded_values = np.insert(value, 0, self.min_value)
+        expx = (self.size+1.)*np.diff(padded_values)/self.scale_value
+        return np.log(expx)
+
+
+class _Unconstrained1D:
+
+    def __init__(self, parent, target, x):
+        self.parent = parent
+        self.shape = parent.shape
+        self.size = parent.size
+        self.ndim = parent.ndim
+        x = np.asarray(x)
+        self.x = x
+        self.quantizer = target(parent, parent.change_of_variable(x))
+        # Internals...
+        self._scaled_expx = (
+                parent.scale_value * np.exp(self.x)
+                / (self.size+1.))
+
+    @property
+    def distortion(self):
+        dist = self.quantizer.distortion
+
+        if not np.isfinite(dist):
+            raise AtSingularity()
+
+        return dist
+
+    @property
+    def gradient(self):
+        """
+        Returns the transformed gradient for the distortion function, ie
+        dDistortion/ dx = dDistortion/dGamma * dGamma/dx
+        """
+        grad = self.quantizer.gradient.dot(self._jacobian)
+
+        if not np.all(np.isfinite(grad)):
+            raise AtSingularity()
+
+        return grad
+
+    @property
+    def hessian(self):
+        """
+        Returns the transformed Hessian for the distortion function
+        """
+        def get_first_term():
+            jac = self._jacobian
+            hess = self.quantizer.hessian
+            return jac.T.dot(hess).dot(jac)
+
+        def get_second_term():
+            grad = self.quantizer.gradient
+            inv_cum_grad = np.flipud(np.cumsum(np.flipud(grad)))
+            return np.diag(self._scaled_expx*inv_cum_grad)
+
+        hess = get_first_term() + get_second_term()
+
+        if not np.all(np.isfinite(hess)):
+            raise AtSingularity()
+
+        return hess
+
+    @property
+    def _jacobian(self):
+        """
+        Returns the self.size-by-self.size np.array containing the jacobian
+        of the change of variable, ie
+        ```
+        \\nabla_{ij} \\Gamma_{h,t}
+        ```
+        """
+        mask = np.tril(np.ones((self.size, self.size)))
+        return self._scaled_expx[np.newaxis, :]*mask
+
+class AbstractQuantizer1D(ABC):
+
+    def __init__(self, parent, value):
+        if not isinstance(parent, AbstractFactory1D):
             raise ValueError("Unexpected parent")
         else:
             self.parent = parent
-        self.lb = lb
-        self.ub = ub
-        # Copy for convenience from parent
-        self.model = parent.model
-        self.shape = parent.shape
-        self.size = parent.size
-        self.previous = parent.previous
-        # Process quantizer value
+
         value = np.asarray(value)
+        # Verifications...
+        if (
+                np.any(~np.isfinite(value))
+                or np.any(np.diff(value) <= 0.)
+                or np.any(value<=self.parent.voronoi_bounds[0])
+                or np.any(value>=self.parent.voronoi_bounds[1])
+            ):
+            raise AtSingularity()
 
-        if value.shape != self.shape:
-            err_msg = 'Unexpected quantizer shape\n'
-        elif not np.all(np.isfinite(value)):
-            err_msg = 'Invalid quantizer (NaN or inf)\n'
-        elif np.any(np.diff(value) <= 0.):
-            err_msg = ('Unexpected quantizer value(s): '
-                   'must be strictly increasing\n')
-        elif np.any(value<=self.lb) or np.any(value>=self.ub):
-            err_msg = ('Unexpected quantizer value(s): '
-                   'outside specified bounds\n')
+        # Set value and compute Voronoi tiles
+        self.value = value
+        self.voronoi = voronoi_1d(
+                self.value,
+                lb=self.parent.voronoi_bounds[0],
+                ub=self.parent.voronoi_bounds[1])
 
-        if 'err_msg' in locals():
-            raise ValueError(err_msg)
-        else:
-            self.value = value
-            self.voronoi = voronoi_1d(self.value, lb=self.lb, ub=self.ub)
-
-        # Previous dimension
-        if  self.previous.ndim == 1:
+        # Previous dimension and broadcast
+        if  self.parent.prev_ndim == 1:
             self.einidx = 'i,ij'
             self.broad_value = self.value[np.newaxis,:]
             self.broad_voronoi = self.voronoi[np.newaxis,:]
-            self.broad_previous_value = self.previous.value[:, np.newaxis]
-        elif self.previous.ndim == 2:
+        elif self.parent.prev_ndim == 2:
             self.einidx ='ij,ijk'
             self.broad_value = self.value[np.newaxis,np.newaxis,:]
             self.broad_voronoi = self.voronoi[np.newaxis,np.newaxis,:]
-            self.broad_previous_value = self.previous.value[:, :, np.newaxis]
         else:
             raise ValueError('Unexpected previous dimension')
-
-    # broad dictionnary with broad voronoi, value ,previous value ,
-
-    @lazy_property
-    def previous_probability(self):
-        return self.previous.probability
 
     # Results
 
@@ -157,13 +241,13 @@ class AbstractQuantizer(ABC):
         """
         return np.einsum(
                 self.einidx,
-                self.previous_probability,
+                self.parent.prev_proba,
                 self.transition_probability)
 
     @property
     def transition_probability(self):
         """
-        Returns a self.previous.shape-by-self.shape np.array
+        Returns a previous-shape-by-shape np.array
         containing the transition probabilities from time t-1 to time t
         """
         return self._integral[0]
@@ -181,7 +265,7 @@ class AbstractQuantizer(ABC):
         """
         out = np.einsum(
                 self.einidx,
-                self.previous_probability,
+                self.parent.prev_proba,
                 self._distortion_elements)
         return np.sum(out)
 
@@ -205,7 +289,7 @@ class AbstractQuantizer(ABC):
                 )
         return -2. * np.einsum(
                 self.einidx,
-                self.previous_probability,
+                self.parent.prev_proba,
                 elements
                 )
 
@@ -225,26 +309,26 @@ class AbstractQuantizer(ABC):
                 )
 
         # Build Hessian
-        hess = np.zeros((self.size, self.size))
+        hess = np.zeros((self.parent.size, self.parent.size))
 
         # Main-diagonal
         main_elements = elements_over - elements_under - self._integral[0]
         main_diagonal = -2. * np.einsum(
                 self.einidx,
-                self.previous_probability,
+                self.parent.prev_proba,
                 main_elements
                 )
         diag_view(hess, k=0)[:] = main_diagonal
 
         # Off-diagonal
-        if self.shape[0] > 1:
+        if self.parent.size > 1:
             off_elements = (
                 self._delta[1][...,1:-1]
                 - self._delta[0][...,1:-1]*self.broad_value[...,1:]
                 )
             off_diagonal = 2. * np.einsum(
                     self.einidx,
-                    self.previous_probability,
+                    self.parent.prev_proba,
                     off_elements)
             diag_view(hess, k=1)[:] = off_diagonal
             diag_view(hess, k=-1)[:] = off_diagonal
@@ -256,30 +340,23 @@ class AbstractQuantizer(ABC):
 #############
 
 class AtSingularity(Exception):
-    def __init__(self, idx):
-        self.idx = np.unique(idx)
+    pass
 
 class Optimizer:
 
-    method = 'trust-ncg'
-    max_iter = 10000
-
-    def __init__(self, factory, *, gtol=1e-4):
-        self.gtol = gtol
+    def __init__(self, factory):
         self.factory = factory
+        if not self.factory.unc_flag:
+            raise ValueError(
+                    "Optimizer only supports unconstrained factories.")
         self.func = lambda x: self.factory.make(x).distortion
         self.jac = lambda x: self.factory.make(x).gradient
         self.hess = lambda x: self.factory.make(x).hessian
-        self.options = {
-            'maxiter': self.max_iter,
-            'disp': False,
-            'gtol': self.factory.get_distortion_scale()*self.gtol
-            }
 
     def optimize(
             self, *,
-            niter=1000, niter_success=50, interval=5,
-            seed=None, x0=None, verbose=True,
+            gtol=1e-4, maxiter=10000, niter=1000, niter_success=50,
+            seed=None, x0=None, verbose=False,
     ):
         """
         Default. Robust when gradient is discontinuous.
@@ -288,44 +365,69 @@ class Optimizer:
             self._niter_success = niter+2
         else:
             self._niter_success = niter_success
-        if verbose:
-            msg = "with gtol={0:.6e}".format(self.options['gtol'])
-            msg += ", niter={0:d}".format(niter)
-            msg += ", niter_success={0:d}".format(self._niter_success)
-            msg += " and interval={0:d}".format(interval)
-            print(msg)
+        options = {
+            'maxiter': maxiter,
+            'disp': False,
+            'gtol': self.factory.distortion_scale*gtol
+            }
         minimizer_kwargs = {
-            'method': self.method,
+            'method': 'trust-ncg',
             'jac': self.jac,
             'hess': self.hess,
-            'options': self.options
+            'options': options
         }
         cb = lambda x,f,accept: self._bh_callback(x, verbose)
-
         def optimize_from(x0_): return basinhopping(
             self.func, x0_, niter=niter,
-            T=self.factory.get_distortion_scale(),
-            interval=interval,
-            take_step=_OptimizerTakeStep(self.factory, seed=seed),
+            take_step=_TakeRandomStep(self.factory, seed=seed),
             disp=False,
             minimizer_kwargs=minimizer_kwargs,
             callback=cb,
         )
-        return self._try_optimization(optimize_from, x0)
 
-    def quick_optimize(self, *, x0=None, verbose=True):
+        if verbose:
+            msg = "Optimize with gtol={0:.6e}".format(options['gtol'])
+            msg += ", maxiter={0:d}".format(options['maxiter'])
+            msg += ", niter={0:d}".format(niter)
+            msg += ", niter_success={0:d}".format(self._niter_success)
+            print(msg)
+
+        out = self._try_optimization(optimize_from, x0)
+
+        return out
+
+    def quick_optimize(self, *,
+            gtol=1e-4, maxiter=10000, x0=None, verbose=False):
         """
         Might stall on a local minimum when gradient is discontinuous.
         """
-        if verbose:
-            print("with gtol={0:.6e}".format(self.options['gtol']))
+        options = {
+            'maxiter': maxiter,
+            'gtol': self.factory.distortion_scale*gtol,
+            'disp': False
+            }
 
         def optimize_from(x0_): return minimize(
-            self.func, x0_, method=self.method,
+            self.func, x0_, method='trust-ncg',
             jac=self.jac, hess=self.hess,
-            options=self.options,
+            options=options,
         )
-        return self._try_optimization(optimize_from, x0)
+
+        if verbose:
+            msg = "Quick optimize with gtol={0:.6e}".format(options['gtol'])
+            msg += ", maxiter={0:d}".format(options['maxiter'])
+            print(msg)
+
+        out = self._try_optimization(optimize_from, x0)
+
+        if verbose:
+            gradnorm = infnorm(out.gradient)
+            msg = "\tDistortion: {0:.6e}, ".format(out.distortion)
+            msg += "Gradient: {0:.6e}".format(gradnorm)
+            print(msg)
+
+        return out
+
 
     def brute_optimize(self, search_width=3.):
         """
@@ -336,22 +438,24 @@ class Optimizer:
                     "Cannot use brute force optimizer for large quantizers.")
         ranges = ((-search_width, search_width),)*self.factory.size
         sol = brute(self.func, ranges)
-        return self.factory.make(sol)
+        return self.factory.make(sol).quantizer
 
-    def _try_optimization(self, optimize_from, x0=None):
+    def _try_optimization(self, optimize_from, x0=None, _try=0):
         if x0 is None:
             x0 = np.zeros(self.factory.shape)
         try:
             opt = optimize_from(x0)
-        except AtSingularity as exc:
-            # Optimizer met a singularity for indices idx
-            # Move by arbitrary displacement
-            x0[exc.idx] += 1e-2
-            return self._try_optimization(optimize_from, x0)
-        return self.factory.make(opt.x)
+        except AtSingularity:
+            x0 = np.random.normal(size=self.factory.shape)
+            _try += 1
+            if _try<10:
+                return self._try_optimization(optimize_from, x0, _try)
+            else:
+                raise RuntimeError("Could not recover from bad Hessian")
+        return self.factory.make(opt.x).quantizer
 
     def _bh_callback(self, x, verbose):
-        q = self.factory.make(x)
+        q = self.factory.make(x).quantizer
 
         # Initialization
         if not hasattr(self, '_distortion'):
@@ -369,8 +473,8 @@ class Optimizer:
                 if self._niter > 0:
                     msg += "New minimum ["
                     msg += "df={0:+.2f}%,".format(dobjective)
-                    msg += "dx={1:.2f}%".format(dvalue)
-                    msg += "]"
+                    msg += "dx={0:.2f}%".format(dvalue)
+                    msg += "] "
                 msg += "Distortion: {0:.6e}, ".format(q.distortion)
                 msg += "Gradient: {0:.6e}".format(gradnorm)
                 print(msg)
@@ -393,68 +497,30 @@ class Optimizer:
         return stop_flag
 
 
-class _OptimizerTakeStep():
-# TODO major refactoring needed here
-    def __init__(
-            self, factory, *, seed=None, persistent=True):
+class _TakeRandomStep():
+
+    def __init__(self, factory, seed=None):
         self.random_state = np.random.RandomState(seed)
         self.factory = factory
-        self.stepsize = 1.
-        self.persistent = persistent
-        if self.factory.previous.size > 1:
-            self.scale = np.mean(np.diff(self.factory.singularities))
-        else:
-            self.scale = self.factory.min_variance/self.factory.size
 
     def __call__(self, x):
         # Search bounds
-        lb = self.factory.min_variance
-        ub = self.factory.singularities[-1] + self.scale
-        if self.persistent:
-            value = self._persistent(self.stepsize, lb, ub, x)
+        if self.factory.singularities.size > 1:
+            span = np.mean(np.diff(self.factory.singularities))
+            lb = self.factory.singularities[0] - span
+            ub = self.factory.singularities[-1] + span
         else:
-            value = self._non_persistent(lb, ub)
-        new_x = self.factory.target._inv_change_of_variable(self.factory, value)
-        # Bound x to avoid numerical instability
-        return np.clip(new_x, -10., 20.)
-
-    def _persistent(self, step, lb, ub, x):
-        _, value = self.factory.target._change_of_variable(self.factory, x)
-        scale_ = 0.5*step*self.scale
-        for i in range(value.size):
-            # Compute truncated normal parameters
-            loc_ = value[i]
-            a_ = (lb-loc_)/scale_
-            b_ = (ub-loc_)/scale_
-            # Simulate
-            tmp = truncnorm.rvs(
-                a_, b_, loc=loc_, scale=scale_,
-                random_state=self.random_state)
-            # Check simulation consistency
-            if not (tmp > lb and tmp < ub):
-                # Fail-safe if numerical instability detected (eg. NaNs)
-                # More likely to happen for large step sizes
-                tmp = uniform.rvs(lb, ub-lb,
-                                  size=value[i:].shape,
-                                  random_state=self.random_state)
-                tmp.sort()
-                value[i:] = tmp
-                msg = "Take-step failsafe: numerical instability "
-                msg += " [stepsize={0:.2f}]".format(step)
-                warnings.warn(msg, UserWarning)
-                break
-            else:
-                # Commit new value and update lower bound
-                lb = value[i] = tmp
-        return value
-
-    def _non_persistent(self, lb, ub):
+            lb = self.factory.min_value
+            ub = lb + 2.*self.factory.scale_value
+        lb = max(lb, self.factory.min_value)
+        # Randomize
         value = uniform.rvs(
-            lb, ub-lb, size=self.parent.shape,
+            lb, ub-lb, size=self.factory.shape,
             random_state=self.random_state)
         value.sort()
-        return value
-
+        new_x = self.factory.inv_change_of_variable(value)
+        # Bound x to avoid numerical instability
+        return np.clip(new_x, -10., 20.)
 
 ###########
 # Voronoi #

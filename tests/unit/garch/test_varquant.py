@@ -10,11 +10,10 @@ from pymaat.quantutil import voronoi_1d, inv_voronoi_1d
 from pymaat.quantutil import Optimizer
 from pymaat.nputil import diag_view
 
-from pymaat.garch.varquant import make_stub_quantizer
+from pymaat.garch.varquant import Quantization
 from pymaat.garch.varquant import _QuantizerFactory
-from pymaat.garch.varquant import _UncQuantizerFactory
 from pymaat.garch.varquant import _Quantizer
-from pymaat.garch.varquant import _Unconstrained
+from pymaat.quantutil import _Unconstrained1D
 
 
 @pytest.fixture(params=[1, 4],
@@ -38,21 +37,25 @@ def previous(prev_size, variance_scale):
     to_ = 1.25 * variance_scale
     value = np.linspace(from_, to_, num=prev_size)
     probability = np.ones((prev_size,))/prev_size
-    return make_stub_quantizer(
+    return Quantization(
         value=value, probability=probability)
 
 
 @pytest.fixture
 def factory(model, size, previous):
-    return _QuantizerFactory(model, size, previous)
+    return _QuantizerFactory.make_from_prev(
+            model, size, False, previous)
+
 
 @pytest.fixture
 def unc_factory(model, size, previous):
-    return _UncQuantizerFactory(model, size, previous)
+    return _QuantizerFactory.make_from_prev(
+            model, size, True, previous)
 
 @pytest.fixture
 def shape(size):
     return (size,)
+
 
 @pytest.fixture
 def x(random_normal):
@@ -61,89 +64,41 @@ def x(random_normal):
 
 @pytest.fixture
 def value(factory, previous, size):
-    from_ = max(factory.min_variance, 0.75*np.min(previous.value))
+    from_ = max(factory.min_value, 0.75*np.min(previous.value))
     to_ = 1.25*np.max(previous.value)
     return np.linspace(from_, to_, num=size)
+
 
 @pytest.fixture
 def optimizer(unc_factory):
     return Optimizer(unc_factory)
 
-class TestOptimizer:
 
-    @pytest.mark.slow
-    def test_optimize(self, optimizer, size):
-        base_quant = optimizer.quick_optimize()
-        robust_quant = optimizer.optimize()
-        brute_quant = optimizer.brute_optimize()
-        # Same distortion
-        pt.assert_almost_equal(
-                base_quant.distortion,
-                brute_quant.distortion,
-                rtol=1e-4)
-        pt.assert_almost_equal(
-                robust_quant.distortion,
-                brute_quant.distortion,
-                rtol=1e-4)
-        # Same solution
-        pt.assert_almost_equal(
-                base_quant.x, brute_quant.x, rtol=1e-3)
-        pt.assert_almost_equal(
-                robust_quant.x, brute_quant.x, rtol=1e-3)
+@pytest.mark.slow
+def test_optimize(optimizer):
+    base_quant = optimizer.quick_optimize()
+    robust_quant = optimizer.optimize()
+    brute_quant = optimizer.brute_optimize()
+    # Same distortion
+    pt.assert_almost_equal(
+        base_quant.distortion,
+        brute_quant.distortion,
+        rtol=1e-4)
+    pt.assert_almost_equal(
+        robust_quant.distortion,
+        brute_quant.distortion,
+        rtol=1e-4)
+    # Same solution
+    pt.assert_almost_equal(
+        base_quant.value, brute_quant.value, rtol=1e-2)
+    pt.assert_almost_equal(
+        robust_quant.value, brute_quant.value, rtol=1e-2)
 
-    @pytest.mark.slow
-    def test_quick_optimize_far_x0_converge_to_same_result(
-           self, optimizer, shape, random_normal):
-       # x
-       init = 2.*random_normal
-       quant = optimizer.quick_optimize(x0=init)
-       x1 = quant.x.copy()
-       # Minus x
-       init = -init
-       quant = optimizer.quick_optimize(x0=init)
-       x2 = quant.x.copy()
-
-       pt.assert_almost_equal(x1, x2, rtol=1e-2)
-
-    @pytest.mark.slow
-    def test_robust_optimize_far_x0_converge_to_same_result(
-           self, optimizer, shape, random_normal):
-       # x
-       init = 2.*random_normal
-       quant = optimizer.optimize(x0=init, seed=12345)
-       x1 = quant.x.copy()
-       # Minus x
-       init = -init
-       quant = optimizer.optimize(x0=init, seed=12345)
-       x2 = quant.x.copy()
-
-       pt.assert_almost_equal(x1, x2, rtol=1e-2)
-
-
-class TestFactory:
-
-    def test__init__(self, model, factory, size, previous):
-        assert factory.model is model
-        assert factory.shape == (size,)
-        assert factory.size == size
-        assert factory.previous is previous
-
-    def test_make_unconstrained(self, unc_factory, x):
-        quant = unc_factory.make(x)
-        quant = unc_factory.make(x)  # Query cache?
-        assert isinstance(quant, _Unconstrained)
-        pt.assert_almost_equal(quant.x, x, atol=1e-16)
-
-    def test_make_from_valid_value(self, factory, value):
-        quant = factory.make(value)
-        quant = factory.make(value)  # Query cache?
-        assert isinstance(quant, _Quantizer)
-        assert not isinstance(quant, _Unconstrained)
-        pt.assert_almost_equal(quant.value, value)
+class TestQuantization:
 
     def test_make_stub_from_valid_value_and_proba(self, value):
         proba = np.ones_like(value)/value.size
-        quant = make_stub_quantizer(value, proba)
+        quant = Quantization(value, proba)
         pt.assert_almost_equal(quant.value, value)
         pt.assert_almost_equal(quant.probability, proba)
         assert quant.size == value.size
@@ -155,13 +110,13 @@ class TestFactory:
         invalid_value = np.append(value, [wrong])
         proba = np.ones_like(invalid_value)/invalid_value.size
         with pytest.raises(ValueError):
-            quant = make_stub_quantizer(invalid_value, proba)
+            quant = Quantization(invalid_value, proba)
 
     def test_make_stub_from_negative_raises_value_error(self, value):
         invalid_value = np.append(value, [-1.])
         proba = np.ones_like(invalid_value)/invalid_value.size
         with pytest.raises(ValueError):
-            quant = make_stub_quantizer(invalid_value, proba)
+            quant = Quantization(invalid_value, proba)
 
     @pytest.mark.parametrize("wrong", [2., -1.])
     def test_make_stub_from_invalid_proba_raises_value_error(
@@ -169,12 +124,32 @@ class TestFactory:
         proba = np.ones_like(value)/value.size
         proba[0] = wrong
         with pytest.raises(ValueError):
-            quant = make_stub_quantizer(value, proba)
+            quant = Quantization(value, proba)
 
-    def test_min_variance(self, factory):
+class TestFactory:
+
+    def test__init__(self, model, factory, size, previous):
+        assert factory.model is model
+        assert factory.shape == (size,)
+        assert factory.size == size
+
+    def test_make_unconstrained(self, unc_factory, x):
+        quant = unc_factory.make(x)
+        quant = unc_factory.make(x)  # Query cache?
+        assert isinstance(quant, _Unconstrained1D)
+        pt.assert_almost_equal(quant.x, x, atol=1e-16)
+
+    def test_make_from_valid_value(self, factory, value):
+        quant = factory.make(value)
+        quant = factory.make(value)  # Query cache?
+        assert isinstance(quant, _Quantizer)
+        assert not isinstance(quant, _Unconstrained1D)
+        pt.assert_almost_equal(quant.value, value)
+
+    def test_min_value(self, factory):
         expected = factory.model.get_lowest_one_step_variance(
-            np.amin(factory.previous.value))
-        pt.assert_almost_equal(factory.min_variance, expected)
+            np.amin(factory.prev_value))
+        pt.assert_almost_equal(factory.min_value, expected)
 
 
 class TestQuantizer:
@@ -219,9 +194,9 @@ class TestQuantizer:
     @pytest.fixture
     def flat_quantizer(self, factory, valid_quantizer):
         value = valid_quantizer.value.copy()
-        value[0] = 0.5 * factory.min_variance
+        value[0] = 0.5 * factory.min_value
         if factory.size > 1:
-            value[1] = factory.min_variance
+            value[1] = factory.min_value
         return factory.make(value)
 
     # Tests
@@ -229,12 +204,6 @@ class TestQuantizer:
     def test__init__invalid_parent_raises_value_error(self, valid_quantizer):
         with pytest.raises(ValueError):
             _Quantizer('invalid_parent', valid_quantizer)
-
-    def test__init__parent_references(self, factory, valid_quantizer):
-        assert valid_quantizer.model is factory.model
-        assert valid_quantizer.size == factory.size
-        assert valid_quantizer.shape == factory.shape
-        assert valid_quantizer.previous is factory.previous
 
     def test__init__invalid_value_ndim_raises_value_error(self, factory):
         invalid_value = np.array([[0., 1.], [2., 3.]])
@@ -273,7 +242,7 @@ class TestQuantizer:
         pt.assert_valid(valid_quantizer.value)
 
     def test_probability_shape(self, valid_quantizer):
-        expected = valid_quantizer.shape
+        expected = valid_quantizer.parent.shape
         value = valid_quantizer.probability.shape
         assert expected == value
 
@@ -292,7 +261,7 @@ class TestQuantizer:
 
     def test_transition_probability_shape(self,
                                           previous, valid_quantizer):
-        expected = (previous.value.size, valid_quantizer.size)
+        expected = (previous.value.size, valid_quantizer.parent.size)
         value = valid_quantizer.transition_probability.shape
         assert expected == value
 
@@ -339,32 +308,6 @@ class TestQuantizer:
         pt.assert_equal(valid_quantizer.hessian,
                         np.transpose(valid_quantizer.hessian))
 
-    # def test_hessian_diag_at_singularity(self, factory, singular_quantizer):
-    #     hessian_diag = diag_view(singular_quantizer.hessian)
-    #     for ii in range(factory.size):
-    #         # Does this Voronoi tile has singularity?
-    #         has_singularity = np.any(isclose(
-    #             singular_quantizer.voronoi[ii:ii+2, np.newaxis],
-    #             factory.singularities[np.newaxis, :]))
-    #         if has_singularity:
-    #             assert hessian_diag[ii] == -np.inf
-    #         else:
-    #             assert np.isfinite(hessian_diag[ii])
-
-    # def test_hessian_off_diag_at_singularity(
-    #         self, factory, singular_quantizer):
-    #     if factory.size > 1:
-    #         hessian_offd = diag_view(singular_quantizer.hessian, k=-1)
-    #         for ii in range(factory.size-1):
-    #             # Does the left bound of Voronoi tile is singularity?
-    #             has_singularity = np.any(
-    #                 singular_quantizer.voronoi[ii+1, np.newaxis]
-    #                 == factory.singularities[np.newaxis, :])
-    #             if has_singularity:
-    #                 assert hessian_offd[ii] == -np.inf
-    #             else:
-    #                 assert np.isfinite(hessian_offd[ii])
-
     # Testing distortion...
 
     def test_distortion_elements(self, model, previous, valid_quantizer):
@@ -383,84 +326,28 @@ class TestQuantizer:
 
     @pytest.mark.parametrize("order_rtol", [(0, 1e-8), (1, 1e-6), (2, 1e-3)])
     def test_integral(self, model, previous, valid_quantizer, order_rtol):
-        order, rtol=order_rtol
-        expected_value=numerical_quantized_integral(
+        order, rtol = order_rtol
+        expected_value = numerical_quantized_integral(
             model, previous, valid_quantizer.value, order=order)
-        value=valid_quantizer._integral[order]
+        value = valid_quantizer._integral[order]
         pt.assert_almost_equal(value, expected_value, rtol=rtol, atol=1e-32)
 
-    # def test_delta_at_singularity_is_inf(self, previous, factory,
-    #                                      singular_quantizer):
-    #     voronoi = singular_quantizer.voronoi
-    #     delta = singular_quantizer._delta
-    #     for (ii, sing) in enumerate(factory.singularities):
-    #         id_ = isclose(sing, voronoi)
-    #         if np.any(id_):
-    #             assert np.sum(id_) == 1
-    #             pt.assert_all(delta[ii, id_] == np.inf)
-    #             pt.assert_finite(delta[ii, ~id_])
-
-    # def test_delta_at_singularity_at_most_one_inf(self, singular_quantizer):
-    #     delta = singular_quantizer._delta
-    #     pt.assert_less_equal(np.sum(delta == np.inf, axis=0), 1,
-    #                          shape='broad')
-    #     pt.assert_less_equal(np.sum(delta == np.inf, axis=1), 1,
-    #                          shape='broad')
-
-    # Testing roots (possibly contains NaNs)
-
-    # @pytest.mark.parametrize("right", [False, True])
-    # def test_pdf(self, valid_quantizer, right):
-    #     root = valid_quantizer._roots[right]
-    #     with np.errstate(invalid='ignore'):
-    #         expected_pdf = norm.pdf(root)
-    #     expected_pdf[:, -1] = 0.0  # Limit at pm inf
-    #     pdf = valid_quantizer._pdf[right]
-    #     pt.assert_almost_equal(pdf, expected_pdf,
-    #                            rtol=1e-12, invalid='allow')
-
-    # @pytest.mark.parametrize("right", [False, True])
-    # def test_cdf(self, valid_quantizer, right):
-    #     root = valid_quantizer._roots[right]
-    #     with np.errstate(invalid='ignore'):
-    #         expected_cdf = norm.cdf(root)
-    #     if right:
-    #         expected_cdf[:, -1] = 1.0  # Limit at plus inf
-    #     else:
-    #         expected_cdf[:, -1] = 0.0  # Limit at minus inf
-    #     value = valid_quantizer._cdf[right]
-    #     pt.assert_almost_equal(value, expected_cdf,
-    #                            rtol=1e-12, invalid='allow')
-
-    # @pytest.mark.parametrize("right", [False, True])
-    # def test_root_reverts_to(self, previous, valid_quantizer, right):
-    #     root = valid_quantizer._roots[right]
-    #     expected, _=valid_quantizer.model.one_step_generate(
-    #         root, previous.value[:, np.newaxis])
-    #     value=np.broadcast_to(
-    #         valid_quantizer.voronoi[np.newaxis, :], expected.shape)
-    #     pt.assert_almost_equal(value, expected,
-    #                            rtol=1e-12,
-    #                            invalid=valid_quantizer._no_roots)
-
-    # def test_roots_left_right_ordering(self, valid_quantizer):
-    #     left = valid_quantizer._roots[False]
-    #     right = valid_quantizer._roots[True]
-    #     pt.assert_less(left, right,
-    #                    invalid=valid_quantizer._no_roots)
+    def test_delta_at_singularity_is_zero(self, previous, factory,
+                                          singular_quantizer):
+        voronoi = singular_quantizer.voronoi
+        delta = singular_quantizer._delta
+        for (ii, sing) in enumerate(factory.singularities):
+            id_ = isclose(sing, voronoi)
+            if np.any(id_):
+                assert np.sum(id_) == 1
+                pt.assert_all(delta[0][ii, id_] == 0.)
+                pt.assert_all(delta[1][ii, id_] == 0.)
 
     @pytest.mark.parametrize("right", [False, True])
     def test_roots_shape(self, valid_quantizer, right):
-        expected_shape = (valid_quantizer.previous.size,
-                          valid_quantizer.size+1)
+        expected_shape = (valid_quantizer.parent.prev_size,
+                          valid_quantizer.parent.size+1)
         assert valid_quantizer._roots[right].shape == expected_shape
-
-    # def test_no_roots(self, model, previous, valid_quantizer):
-    #     value = valid_quantizer._no_roots
-    #     lowest = model.get_lowest_one_step_variance(previous.value)
-    #     expected_value = (lowest[:, np.newaxis]
-    #                       > valid_quantizer.voronoi[np.newaxis, :])
-    #     pt.assert_all(value == expected_value)
 
     # Voronoi
 
@@ -476,53 +363,48 @@ class TestUnconstrained():
     RTOL_HESSIAN = 1e-6
 
     @pytest.fixture
-    def quantizer(self, unc_factory, x):
+    def unc(self, unc_factory, x):
         return unc_factory.make(x)
 
-    def test_value_is_in_space(self, quantizer):
-        pt.assert_finite(quantizer.value)
+    def test_value_is_in_space(self, unc):
+        pt.assert_finite(unc.quantizer.value)
         # strictly increasing
-        pt.assert_greater(np.diff(quantizer.value), 0.0, shape='broad')
+        pt.assert_greater(np.diff(unc.quantizer.value), 0.0, shape='broad')
         pt.assert_greater(
-            quantizer.value, quantizer.parent.min_variance, shape='broad')
+            unc.quantizer.value, unc.parent.min_value, shape='broad')
 
-    def test_gradient(self, unc_factory, x, quantizer):
+    def test_gradient(self, unc_factory, x, unc):
         pt.assert_gradient_at(
-            quantizer.gradient, x, rtol=self.RTOL_GRADIENT,
+            unc.gradient, x, rtol=self.RTOL_GRADIENT,
             function=lambda x_: unc_factory.make(x_).distortion
         )
 
-    def test_hessian(self, unc_factory, x, quantizer):
+    def test_hessian(self, unc_factory, x, unc):
         pt.assert_hessian_at(
-            quantizer.hessian, x, rtol=self.RTOL_HESSIAN,
+            unc.hessian, x, rtol=self.RTOL_HESSIAN,
             gradient=lambda x_: unc_factory.make(x_).gradient
         )
 
-    def test_jacobian(self, unc_factory, x, quantizer):
+    def test_jacobian(self, unc_factory, x, unc):
         pt.assert_jacobian_at(
-            quantizer._jacobian,
+            unc._jacobian,
             x, rtol=1e-8,
-            function=lambda x_: unc_factory.make(x_).value
+            function=lambda x_: unc_factory.make(x_).quantizer.value
         )
 
-    def test_changed_variable(self, quantizer):
-        expected_value = (quantizer.parent.min_variance
-                          + np.cumsum(quantizer._scaled_exp_x))
-        pt.assert_almost_equal(quantizer.value, expected_value, rtol=1e-12)
+    def test_scaled_exponential_of_x(self, unc_factory, unc):
+        expected_value = np.exp(unc.x) * unc_factory.min_value / (unc.size+1)
+        pt.assert_almost_equal(unc._scaled_expx, expected_value, rtol=1e-12)
 
-    def test_inv_change_variable_reverts(self, factory, quantizer):
-        x = quantizer._inv_change_of_variable(factory, quantizer.value)
-        expected_x = quantizer.x
-        pt.assert_almost_equal(x, expected_x, rtol=1e-6)
+    def test_changed_variable(self, unc_factory, unc):
+        expected_value = unc_factory.min_value + np.cumsum(unc._scaled_expx)
+        pt.assert_almost_equal(unc.quantizer.value,
+                expected_value, rtol=1e-12)
 
-    def test_scaled_exponential_of_x(self, quantizer):
-        expected_value = (
-                np.exp(quantizer.x)
-                * quantizer.parent.min_variance
-                / (quantizer.size+1)
-                )
-        pt.assert_almost_equal(quantizer._scaled_exp_x,
-                               expected_value, rtol=1e-12)
+    def test_inv_change_variable_reverts(self, unc_factory, unc):
+        x = unc_factory.inv_change_of_variable(unc.quantizer.value)
+        pt.assert_almost_equal(x, unc.x, rtol=1e-6)
+
 
 #######################
 # Helper Function(s) #
@@ -566,17 +448,17 @@ def numerical_quantized_integral(model, previous, value, *,
             return integrand(innov, next_variance, value)
 
         # Identify integration intervals
-        (b,c) = model.one_step_real_roots(prev_variance, lb)
+        (b, c) = model.real_roots(prev_variance, lb)
         if ub == np.inf:
             # Crop integral to improve numerical accuracy
             CROP = 10.
-            a = min(-CROP,b)
-            d = max(CROP,c)
+            a = min(-CROP, b)
+            d = max(CROP, c)
         else:
-            (a,d) = model.one_step_real_roots(prev_variance, ub)
+            (a, d) = model.real_roots(prev_variance, ub)
         # Perform integration by quadrature
         return (integrate.quad(function_to_integrate, a, b)[0]
-               + integrate.quad(function_to_integrate, c, d)[0])
+                + integrate.quad(function_to_integrate, c, d)[0])
 
     # Perform Integration
     voronoi = voronoi_1d(value, lb=0.)

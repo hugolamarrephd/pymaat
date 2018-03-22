@@ -12,13 +12,65 @@ def get_garch_factory(retype='', vartype='hngarch'):
 
 class AbstractOneLagReturn(ABC):
 
-     @abstractmethod
-     def one_step_generate(self, innovations, variances, volatilities):
-         pass
+    def one_step_generate(self, innovations, variances):
+        volatilities = np.sqrt(variances)
+        return self._one_step_generate(innovations, variances, volatilities)
 
-     @abstractmethod
-     def one_step_filter(self, returns, variances, volatilities):
-         pass
+    def one_step_filter(self, returns, variances):
+        volatilities = np.sqrt(variances)
+        return self._one_step_filter(returns, variances, volatilities)
+
+    def root_price_derivative(self, prices, variances):
+        volatilities = np.sqrt(variances)
+        with np.errstate(divide='ignore'):
+            dX = self._root_price_derivative(
+                    prices, variances, volatilities)
+        # Limit cases
+        # (1) Zero
+        limit_index = np.broadcast_to(prices==0., dX.shape)
+        dX[limit_index] = np.inf
+        # (2) Inf
+        limit_index = np.broadcast_to(prices==np.inf, dX.shape)
+        dX[limit_index] = 0.
+        # (3) Negative 
+        limit_index = np.broadcast_to(prices<0., dX.shape)
+        dX[limit_index] = np.nan
+        return dX
+
+    def price_integral_until(self, prices, variances, innovations, order=0):
+        if order==0:
+            return norm.cdf(innovations)
+        elif order==1:
+            volatilities = np.sqrt(variances)
+            return self._first_order_integral(
+                    prices, variances, innovations, volatilities)
+        elif order==2:
+            volatilities = np.sqrt(variances)
+            return self._second_order_integral(
+                    prices, variances, innovations, volatilities)
+        else:
+            raise ValueError('Only supports order 0, 1 and 2.')
+
+    @abstractmethod
+    def _one_step_generate(self, innovations, variances, volatilities):
+     pass
+
+    @abstractmethod
+    def _one_step_filter(self, returns, variances, volatilities):
+     pass
+
+    @abstractmethod
+    def _root_price_derivative(self, prices, variances, volatilities):
+     pass
+
+    @abstractmethod
+    def _first_order_integral(self, variances, innovations):
+        pass
+
+    @abstractmethod
+    def _second_order_integral(self, variances, innovations):
+        pass
+
 
 class AbstractOneLagGarch(ABC):
 
@@ -34,18 +86,15 @@ class AbstractOneLagGarch(ABC):
         pass
 
     @abstractmethod
-    def _real_roots_unsigned_derivative(self,
-            variances, next_variances):
+    def _real_roots_unsigned_derivative(self, variances, next_variances):
         pass
 
     @abstractmethod
-    def _first_order_expectation_factors(self,
-            variances, innovations):
+    def _first_order_integral_factors(self, variances, innovations):
         pass
 
     @abstractmethod
-    def _second_order_expectation_factors(self,
-            variances, innovations):
+    def _second_order_integral_factors(self, variances, innovations):
         pass
 
     ##############
@@ -97,15 +146,29 @@ class AbstractOneLagGarch(ABC):
     # One step #
     ############
 
+    # TODO: send this to spec
     @method_decorator(elbyel)
-    def get_lowest_one_step_variance(self, variances):
-        return self.omega + self.beta*variances
+    def get_lowest_one_step_variance(
+            self, variances, lb=-np.inf, ub=np.inf):
+        adj_lb = lb - self.gamma*np.sqrt(variances)
+        adj_ub = ub - self.gamma*np.sqrt(variances)
+        out = np.minimum(adj_lb**2., adj_ub**2.)
+        out[np.logical_and(adj_lb<0., adj_ub>0.)] = 0.
+        return self.omega + self.beta*variances + self.alpha*out
+
+    @method_decorator(elbyel)
+    def get_highest_one_step_variance(
+            self, variances, lb=-np.inf, ub=np.inf):
+        adj_lb = lb - self.gamma*np.sqrt(variances)
+        adj_ub = ub - self.gamma*np.sqrt(variances)
+        out = np.maximum(adj_lb**2., adj_ub**2.)
+        return self.omega + self.beta*variances + self.alpha*out
 
     @method_decorator(elbyel)
     def one_step_filter(self, returns, variances):
         volatilities = np.sqrt(variances)
-        innovations = self.retspec.one_step_filter(returns,
-                variances, volatilities)
+        innovations = self.retspec._one_step_filter(
+                returns, variances, volatilities)
         next_variances = self._equation(innovations,
                 variances, volatilities)
         return (next_variances, innovations)
@@ -113,14 +176,14 @@ class AbstractOneLagGarch(ABC):
     @method_decorator(elbyel)
     def one_step_generate(self, innovations, variances):
         volatilities = np.sqrt(variances)
-        returns = self.retspec.one_step_generate(innovations,
-                variances, volatilities)
+        returns = self.retspec._one_step_generate(
+                innovations, variances, volatilities)
         next_variances = self._equation(innovations,
                 variances, volatilities)
         return (next_variances,returns)
 
     @method_decorator(elbyel)
-    def one_step_real_roots(self, variances, next_variances):
+    def real_roots(self, variances, next_variances):
         roots = self._real_roots(variances, next_variances)
         # Limit cases
         limit_index = np.broadcast_to(
@@ -131,19 +194,20 @@ class AbstractOneLagGarch(ABC):
         return tuple(roots)
 
     @method_decorator(elbyel)
-    def one_step_real_roots_unsigned_derivative(
+    def real_roots_unsigned_derivative(
             self, variances, next_variances):
         # Warning: returns zero at singularity
         #    although the theoritical value is inf
-        der = self._real_roots_unsigned_derivative(variances, next_variances)
+        dX = self._real_roots_unsigned_derivative(
+                variances, next_variances)
         # Limit cases
         limit_index = np.broadcast_to(
-                next_variances==np.inf, der.shape)
-        der[limit_index] = 0.
-        return der
+                next_variances==np.inf, dX.shape)
+        dX[limit_index] = 0.
+        return dX
 
     @method_decorator(elbyel)
-    def one_step_expectation_until(self, variances, innovations, *,
+    def variance_integral_until(self, variances, innovations, *,
             order=0, _pdf=None, _cdf=None):
         """
         Integrate
@@ -151,17 +215,17 @@ class AbstractOneLagGarch(ABC):
             (_equation(z)**order)*gaussian_pdf(z)*dz
             ```
         from -infty until innovations.
-        Rem. _pdf and _cdf are used internally for efficiency.
+        Rem. _pdf and _cdf may be used for efficiency.
         """
         if _pdf is None:
             _pdf = norm.pdf(innovations)
         if _cdf is None:
             _cdf = norm.cdf(innovations)
-        pdf_factor, cdf_factor = self._expectation_factors(
+        pdf_factor, cdf_factor = self._variance_integral_factors(
                         variances, innovations, order=order)
         return pdf_factor*_pdf + cdf_factor*_cdf
 
-    def _expectation_factors(self, variances, innovations, *,
+    def _variance_integral_factors(self, variances, innovations, *,
             order=0):
         # Limit cases (innovations = +- infinity)
         #   PDF has exponential decrease towards zero that overwhelms
@@ -173,11 +237,11 @@ class AbstractOneLagGarch(ABC):
             cdf_factor = np.ones_like(variances)
         elif order==1:
             (pdf_factor, cdf_factor) = \
-                    self._first_order_expectation_factors(
+                    self._first_order_integral_factors(
                     variances, innovations)
         elif order==2:
             (pdf_factor, cdf_factor) = \
-                    self._second_order_expectation_factors(
+                    self._second_order_integral_factors(
                     variances, innovations)
         else:
             raise ValueError('Only supports order 0,1 and 2.')

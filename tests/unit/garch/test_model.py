@@ -41,8 +41,8 @@ class TestTimeseries():
     def first_variance(self, variances):
         return variances[4]
 
-    def test_generate_revert_to_filter(self, model,
-                                       returns, first_variance, innovations):
+    def test_generate_reverts_to_filter(
+            self, model, returns, first_variance, innovations):
         generated_variances, generated_returns = \
             model.timeseries_generate(innovations, first_variance)
         filtered_variances, filtered_innovations = \
@@ -50,8 +50,8 @@ class TestTimeseries():
         pt.assert_almost_equal(generated_variances, filtered_variances)
         pt.assert_almost_equal(innovations, filtered_innovations)
 
-    def test_filter_initialize_to_first_variance(self, model,
-                                                 returns, first_variance):
+    def test_filter_initialize_to_first_variance(
+            self, model, returns, first_variance):
         filtered_variance, _ = model.timeseries_filter(
             returns, first_variance)
         pt.assert_almost_equal(filtered_variance[0], first_variance)
@@ -129,10 +129,10 @@ class TestOneStep():
     @pytest.mark.parametrize("funcname_nin_nout",
                              [('one_step_filter', 2, 2),
                               ('one_step_generate', 2, 2),
-                                 ('get_lowest_one_step_variance', 1, 1),
-                                 ('one_step_real_roots', 2, 2),
-                                 ('one_step_real_roots_unsigned_derivative', 2, 1),
-                                 ('one_step_expectation_until', 2, 1)],
+                              ('get_lowest_one_step_variance', 1, 1),
+                              ('real_roots', 2, 2),
+                              ('real_roots_unsigned_derivative', 2, 1),
+                              ('variance_integral_until', 2, 1)],
                              ids=lambda val: val[0])
     def test_all_are_elbyel(self, model, funcname_nin_nout):
         funcname, *nin_nout = funcname_nin_nout
@@ -174,7 +174,7 @@ class TestOneStep():
         pt.assert_almost_equal(value, expected_value, rtol=1e-6)
 
     def test_valid_roots(self, model, variances, valid_one_step):
-        roots = model.one_step_real_roots(variances, valid_one_step)
+        roots = model.real_roots(variances, valid_one_step)
         for z in roots:
             # Check that it reverts to...
             solved, _ = model.one_step_generate(z, variances)
@@ -182,68 +182,67 @@ class TestOneStep():
 
     def test_left_right_roots_order(self, model,
                                     variances, valid_one_step):
-        left, right = model.one_step_real_roots(variances, valid_one_step)
+        left, right = model.real_roots(variances, valid_one_step)
         pt.assert_less(left, right)
 
     def test_invalid_roots(self, model, variances, invalid_one_step):
-        roots = model.one_step_real_roots(variances, invalid_one_step)
+        roots = model.real_roots(variances, invalid_one_step)
         for z in roots:
             pt.assert_valid(z)  # Still returns valid values (real part)
 
     def test_same_roots_at_singularity(self, model,
                                        variances, lowest_one_step):
-        left, right = model.one_step_real_roots(variances, lowest_one_step)
+        left, right = model.real_roots(variances, lowest_one_step)
         pt.assert_almost_equal(left, right, rtol=1e-16)
 
     def test_root_at_inf_is_pm_inf(self, model, variances, inf):
-        roots = model.one_step_real_roots(variances, inf)
+        roots = model.real_roots(variances, inf)
         pt.assert_equal(roots[0], -np.inf, shape='broad')
         pt.assert_equal(roots[1], np.inf, shape='broad')
 
     def test_roots_derivatives_when_valid(self, model,
                                           variances, valid_one_step):
         # Test validity?
-        der = model.one_step_real_roots_unsigned_derivative(
+        der = model.real_roots_unsigned_derivative(
             variances, valid_one_step)
         # Derivative value?
 
         def func(next_variances):
-            _, z = model.one_step_real_roots(variances, next_variances)
+            _, z = model.real_roots(variances, next_variances)
             return z
         pt.assert_derivative_at(der, valid_one_step,
                                 function=func, rtol=1e-4)
 
     def test_roots_derivative_is_positive(self, model,
                                           variances, valid_one_step):
-        der = model.one_step_real_roots_unsigned_derivative(
+        der = model.real_roots_unsigned_derivative(
             variances, valid_one_step)
         pt.assert_greater(der, 0.0, shape='broad')
 
     def test_invalid_roots_derivatives(self, model, variances,
                                        invalid_one_step):
-        der = model.one_step_real_roots_unsigned_derivative(
+        der = model.real_roots_unsigned_derivative(
             variances, invalid_one_step)
         pt.assert_equal(der, 0., shape='broad')
 
     def test_roots_derivatives_is_zero_at_singularity(
             self, model, variances, lowest_one_step):
-        der = model.one_step_real_roots_unsigned_derivative(
+        der = model.real_roots_unsigned_derivative(
             variances, lowest_one_step)
         pt.assert_equal(der, 0., shape='broad')
 
     def test_roots_derivatives_at_inf_are_zero(
             self, model, variances, inf):
-        der = model.one_step_real_roots_unsigned_derivative(variances, inf)
+        der = model.real_roots_unsigned_derivative(variances, inf)
         pt.assert_equal(der, 0., shape='broad')
 
     # One-step variance integration
     @pytest.mark.parametrize("order", [0, 1, 2])
-    @pytest.mark.parametrize("shape", (1,))  # override shape because slow
-    def test_one_step_expectation_until(self, model, innovations, variances,
-                                        order):
-        integral = model.one_step_expectation_until(variances, innovations,
-                                                    order=order)
-
+    @pytest.mark.parametrize("shape", (1,))
+    def test_variance_integral_until(
+            self, model, innovations, variances, order):
+        integral = model.variance_integral_until(variances, innovations,
+                                                 order=order)
         def func_to_integrate(z):
             (h, _) = model.one_step_generate(z, variances)
             return h**np.float64(order)*norm.pdf(z)
@@ -251,14 +250,13 @@ class TestOneStep():
                                  innovations, lower_bound=-10., rtol=1e-4)
 
     @pytest.mark.parametrize("order", [0, 1, 2])
-    @pytest.mark.parametrize("shape", (1,))  # override shape because slow
-    def test_one_step_expectation_until_inf(self, inf, model, variances,
-                                            order):
+    @pytest.mark.parametrize("shape", (1,))
+    def test_variance_integral_until_inf(
+            self, inf, model, variances, order):
         # Value
-        integral = model.one_step_expectation_until(variances, inf,
-                                                    order=order)
+        integral = model.variance_integral_until(
+                variances, inf, order=order)
         # Expected value
-
         def func_to_integrate(z):
             (h, _) = model.one_step_generate(z, variances)
             return h**np.float64(order)*norm.pdf(z)
@@ -266,24 +264,100 @@ class TestOneStep():
                                  rtol=1e-2)
 
     @pytest.mark.parametrize("order", [0, 1, 2])
-    @pytest.mark.parametrize("shape", (1,))  # override shape because slow
-    def test_one_step_expectation_until_minf(self, minf,
-                                             model, variances, order):
-        integral = model.one_step_expectation_until(variances, minf,
-                                                    order=order)
-        pt.assert_equal(integral, 0.0)
+    def test_variance_integral_until_minf(
+            self, minf, model, variances, order):
+        integral = model.variance_integral_until(
+                variances, minf, order=order)
+        pt.assert_equal(integral, 0.0, shape='broad')
 
     @pytest.mark.parametrize("invalid_order", ['abc', 3, -1, 2.123, None])
-    @pytest.mark.parametrize("shape", (1,))  # override shape because slow
-    def test_one_step_expectation_until_unexpected_order(self, model,
-                                                         variances, invalid_order):
+    def test_variance_integral_until_unexpected_order(
+            self, model, variances, invalid_order):
         with pytest.raises(ValueError):
-            model.one_step_expectation_until(variances, 0.,
-                                             order=invalid_order)
+            model.variance_integral_until(variances, 0., order=invalid_order)
 
-    # TODO: send to estimator
-    # def test_neg_log_like_at_few_values(self, model):
-    #     nll = self.model.negative_log_likelihood(1, 1)
-    #     pt.assert_almost_equal(nll, 0.5)
-    #     nll = self.model.negative_log_likelihood(0, np.exp(1))
-    #     pt.assert_almost_equal(nll, 0.5)
+
+class TestRetSpec():
+
+    @pytest.fixture(params=[(1,), (2, 3), (4, 5, 6), ])
+    def shape(self, request):
+        return request.param
+
+    def test_generate_reverts_to_filter(
+            self, model, innovations, variances):
+        returns = model.retspec.one_step_generate(innovations, variances)
+        expected_innovations = model.retspec.one_step_filter(
+                returns, variances)
+        pt.assert_almost_equal(innovations, expected_innovations)
+
+    def test_root_price_derivative(
+            self, model, returns, variances):
+        prices = np.exp(returns)
+        der = model.retspec.root_price_derivative(prices, variances)
+        def func_to_derivate(prices):
+            returns = np.log(prices)
+            return model.retspec.one_step_filter(returns, variances)
+        pt.assert_derivative_at(der, prices, function=func_to_derivate)
+
+    def test_root_price_der_at_zero_is_inf(self, model, variances):
+        der = model.retspec.root_price_derivative(0., variances)
+        pt.assert_equal(der, np.inf, shape = 'broad')
+
+    def test_root_price_der_at_inf_is_zero(self, model, variances):
+        der = model.retspec.root_price_derivative(np.inf, variances)
+        pt.assert_equal(der, 0.0, shape = 'broad')
+
+    def test_root_price_der_at_negative(self, model, variances):
+        der = model.retspec.root_price_derivative(-1., variances)
+        pt.assert_invalid(der)
+
+    @pytest.mark.parametrize("order", [0, 1, 2])
+    @pytest.mark.parametrize("shape", (1,))
+    def test_price_integral_until(
+            self, model, returns, variances, innovations, order):
+        prices = np.exp(returns)
+        integral = model.retspec.price_integral_until(
+                prices, variances, innovations, order=order)
+        def func_to_integrate(z):
+            next_prices = prices*np.exp(
+                    model.retspec.one_step_generate(z, variances))
+            return next_prices**np.float64(order)*norm.pdf(z)
+        pt.assert_integral_until(integral, func_to_integrate,
+                                 innovations, lower_bound=-10.)
+
+    @pytest.mark.parametrize("order", [0, 1, 2])
+    @pytest.mark.parametrize("shape", (1,))
+    def test_price_integral_until_inf(
+            self, model, returns, variances, order):
+        prices = np.exp(returns)
+        integral = model.retspec.price_integral_until(
+                prices, variances, np.inf, order=order)
+        def func_to_integrate(z):
+            next_prices = prices*np.exp(
+                    model.retspec.one_step_generate(z, variances))
+            return next_prices**np.float64(order)*norm.pdf(z)
+        pt.assert_integral_until(
+                integral, func_to_integrate, np.inf)
+
+    @pytest.mark.parametrize("order", [0, 1, 2])
+    def test_price_integral_until_minf(
+            self, model, returns, variances, order):
+        prices = np.exp(returns)
+        integral = model.retspec.price_integral_until(
+                prices, variances, -np.inf, order=order)
+        pt.assert_equal(integral, 0., shape='broad')
+
+    @pytest.mark.parametrize("invalid_order", ['abc', 3, -1, 2.123, None])
+    def test_variance_integral_until_unexpected_order(
+            self, model, returns, variances, invalid_order):
+        prices = np.exp(returns)
+        with pytest.raises(ValueError):
+            model.retspec.price_integral_until(
+                    prices, variances, 0., order=invalid_order)
+
+        # TODO: send to estimator
+        # def test_neg_log_like_at_few_values(self, model):
+        #     nll = self.model.negative_log_likelihood(1, 1)
+        #     pt.assert_almost_equal(nll, 0.5)
+        #     nll = self.model.negative_log_likelihood(0, np.exp(1))
+        #     pt.assert_almost_equal(nll, 0.5)
