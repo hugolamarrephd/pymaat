@@ -46,7 +46,7 @@ def test_garch_quantization():
         gamma=196.21)
     # Instantiate the quantization from a model
     quantization = pymaat.garch.quant.Core(model, 0.18**2./252.,
-            price_size=10, variance_size=10, nper=9)
+            price_size=25, variance_size=10, nper=9)
     quantization.optimize(verbose=True, fast=False) # Do computations
     quantization.plot_values_3_by_3() # Plot result
     plt.savefig(

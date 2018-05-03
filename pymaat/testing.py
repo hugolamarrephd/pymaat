@@ -344,7 +344,8 @@ def assert_jacobian_at(jacobian_fcn_or_val, at, *, function=None,
 
 def assert_hessian_at(hessian_fcn_or_val, at, *,
                       function=None, gradient=None,
-                      rtol=1e-2, atol=0, mode='central'):
+                      rtol=1e-2, atol=0, mode='central',
+                      invalid='fail'):
     __tracebackhide__ = not DEBUG  # Hide traceback for py.test
     if callable(hessian_fcn_or_val):
         value = hessian_fcn_or_val(at)
@@ -358,7 +359,7 @@ def assert_hessian_at(hessian_fcn_or_val, at, *,
         expected_value = pymaat.findiff.hessian_at(at,
                                                    function=function, mode=mode)
     assert_almost_equal(value, expected_value, rtol=rtol, atol=atol,
-                        invalid='fail')
+                        invalid=invalid)
 
 
 ###############

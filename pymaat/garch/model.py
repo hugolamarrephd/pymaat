@@ -32,7 +32,7 @@ class AbstractOneLagReturn(ABC):
         # (2) Inf
         limit_index = np.broadcast_to(prices==np.inf, dX.shape)
         dX[limit_index] = 0.
-        # (3) Negative 
+        # (3) Negative
         limit_index = np.broadcast_to(prices<0., dX.shape)
         dX[limit_index] = np.nan
         return dX
@@ -197,7 +197,7 @@ class AbstractOneLagGarch(ABC):
     def real_roots_unsigned_derivative(
             self, variances, next_variances):
         # Warning: returns zero at singularity
-        #    although the theoritical value is inf
+        #    even if theoretical value is inf
         dX = self._real_roots_unsigned_derivative(
                 variances, next_variances)
         # Limit cases
@@ -207,41 +207,36 @@ class AbstractOneLagGarch(ABC):
         return dX
 
     @method_decorator(elbyel)
-    def variance_integral_until(self, variances, innovations, *,
-            order=0, _pdf=None, _cdf=None):
+    def variance_integral_until(self, variances, innovations, order=0):
         """
         Integrate
             ```
             (_equation(z)**order)*gaussian_pdf(z)*dz
             ```
         from -infty until innovations.
-        Rem. _pdf and _cdf may be used for efficiency.
         """
-        if _pdf is None:
-            _pdf = norm.pdf(innovations)
-        if _cdf is None:
-            _cdf = norm.cdf(innovations)
-        pdf_factor, cdf_factor = self._variance_integral_factors(
-                        variances, innovations, order=order)
-        return pdf_factor*_pdf + cdf_factor*_cdf
+        return self._variance_integral_until(
+                variances,
+                innovations,
+                order,
+                norm.pdf(innovations),
+                norm.cdf(innovations))
 
-    def _variance_integral_factors(self, variances, innovations, *,
-            order=0):
+    def _variance_integral_until(
+            self, variances, innovations, order, _pdf, _cdf):
         # Limit cases (innovations = +- infinity)
         #   PDF has exponential decrease towards zero that overwhelms
         #   any polynomials, e.g. `(z+z**2)*exp(-z**2)->0`
         limit_cases = np.isinf(innovations)
         # Compute PDF and CDF factors
         if order==0:
-            pdf_factor = np.zeros_like(innovations)
-            cdf_factor = np.ones_like(variances)
+            b = np.broadcast(variances, innovations)
+            return np.broadcast_to(_cdf, b.shape)
         elif order==1:
-            (pdf_factor, cdf_factor) = \
-                    self._first_order_integral_factors(
+            (pdf_factor, cdf_factor) = self._first_order_integral_factors(
                     variances, innovations)
         elif order==2:
-            (pdf_factor, cdf_factor) = \
-                    self._second_order_integral_factors(
+            (pdf_factor, cdf_factor) = self._second_order_integral_factors(
                     variances, innovations)
         else:
             raise ValueError('Only supports order 0,1 and 2.')
@@ -249,7 +244,13 @@ class AbstractOneLagGarch(ABC):
         limit_cases = np.broadcast_to(limit_cases, pdf_factor.shape)
         # Set PDF factor to zero to avoid `inf*zero` indetermination
         pdf_factor[limit_cases] = 0
-        return (pdf_factor, cdf_factor)
+        # Compute pdf_factor*pdf + cdf_factor*cdf
+        out = pdf_factor
+        out *= _pdf
+        cdf_term = cdf_factor
+        cdf_term *= _cdf
+        out += cdf_term
+        return out
 
     #############
     # Utilities #

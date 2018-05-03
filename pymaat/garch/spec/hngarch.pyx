@@ -31,18 +31,17 @@ class HestonNandiGarch(AbstractOneLagGarch):
     def _real_roots(self, variances, next_variances):
         discr = (next_variances-self.omega-self.beta*variances)/self.alpha
         const = self.gamma * np.sqrt(variances)
-        sqrtdiscr = np.maximum(discr, 0.)**0.5 # Real part only
+        sqrtdiscr = np.maximum(discr, 0.)**0.5  # Real part only
         return [const + (pm * sqrtdiscr) for pm in [-1., 1.]]
 
     def _real_roots_unsigned_derivative(self, variances, next_variances):
         discr = next_variances-self.omega-self.beta*variances
-        sqrtdiscr = (self.alpha*np.maximum(discr, 0.))**0.5 # Real part only
+        sqrtdiscr = (self.alpha*np.maximum(discr, 0.))**0.5  # Real part only
         out = np.zeros_like(sqrtdiscr)
         out[sqrtdiscr>0.] = 0.5 / sqrtdiscr[sqrtdiscr>0.]
         return out
 
-    def _first_order_integral_factors(self,
-            variances, innovations):
+    def _first_order_integral_factors(self, variances, innovations):
         # PDF
         with np.errstate(invalid='ignore'):
             # Infinite innovations are silently ignored here
@@ -53,27 +52,24 @@ class HestonNandiGarch(AbstractOneLagGarch):
                 + (self.beta+self.alpha*self.gamma**2) * variances)
         return (pdf_factor, cdf_factor)
 
-    def _second_order_integral_factors(self,
-            variances, innovations):
+    def _second_order_integral_factors(self, variances, innovations):
         # Preliminary computations
-        gamma_vol = self.gamma*variances**0.5
-        gamma_vol_squared = gamma_vol**2.
-        betah_plus_omega = self.beta*variances + self.omega
+        z = innovations
+        gv = self.gamma*variances**0.5
+        gv2 = gv**2.
+        minh = self.beta*variances + self.omega
         # PDF
         with np.errstate(invalid='ignore'):
             # Infinite innovations are silently ignored here
-            innovations_squared = innovations**2.
-            pdf_factor = (self.alpha
-                        *(2.*gamma_vol_squared*(2.*gamma_vol-3.*innovations)
-                        + 4.*gamma_vol*(innovations_squared+2.)
-                        - innovations*(innovations_squared+3.))
-                        + 2.*(2.*gamma_vol-innovations)*betah_plus_omega)
+            z2 = z*z
+            pdf_factor = 2.*gv2*(2.*gv-3.*z) + 4.*gv*(z2+2.) - z*(z2+3.)
+            pdf_factor *= self.alpha
+            pdf_factor +=  2.*(2.*gv-z)*minh
             pdf_factor *= self.alpha
         # CDF
-        cdf_factor = (self.alpha**2.
-                *(gamma_vol_squared*(gamma_vol_squared+6.)+3.)
-                + 2.*self.alpha*(gamma_vol_squared+1.)*betah_plus_omega
-                + betah_plus_omega**2.)
+        cdf_factor = self.alpha**2.*(gv2*(gv2+6.)+3.)
+        cdf_factor += 2.*self.alpha*(gv2+1.)*minh
+        cdf_factor += minh**2.
         return (pdf_factor, cdf_factor)
 
 ##########

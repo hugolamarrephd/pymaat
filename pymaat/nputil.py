@@ -5,7 +5,8 @@ import numpy as np
 
 from pymaat.util import PymaatException
 
-DEBUG = False
+def icumsum(a):
+    return np.cumsum(a[::-1])[::-1]
 
 #################
 # Special Views #
@@ -99,10 +100,7 @@ def elbyel(function):
     old_function = function
     function = atleast_1d(function)
     function = handle_scalar_input(function)
-    if DEBUG:
-        return wraps(old_function)(function)
-    else:
-        return function
+    return wraps(old_function)(function)
 
 def forced_elbyel(function):
     '''
@@ -114,10 +112,7 @@ def forced_elbyel(function):
     old_function = function
     function = broadcast(function)
     function = handle_scalar_input(function)
-    if DEBUG:
-        return wraps(old_function)(function)
-    else:
-        return function
+    return wraps(old_function)(function)
 
 def atleast_1d(function):
     '''
@@ -137,10 +132,7 @@ def atleast_1d(function):
             args.append(np.atleast_1d(np.asanyarray(a)))
         # Call wrapped function with new arguments
         return function(*args, **kargs)
-    if DEBUG:
-        return wraps(function)(wrapper)
-    else:
-        return wrapper
+    return wraps(function)(wrapper)
 
 def broadcast(function):
     '''
@@ -158,10 +150,7 @@ def broadcast(function):
         *args, = np.broadcast_arrays(*args)
         # Call wrapped function with new arguments
         return function(*args, **kargs)
-    if DEBUG:
-        return wraps(function)(wrapper)
-    else:
-        return wrapper
+    return wraps(function)(wrapper)
 
 def handle_scalar_input(function):
     '''
@@ -202,10 +191,7 @@ def handle_scalar_input(function):
                 outputs = outputs[0]
 
         return outputs
-    if DEBUG:
-        return wraps(function)(wrapper)
-    else:
-        return wrapper
+    return wraps(function)(wrapper)
 
 def workon_axis(function):
     '''
@@ -254,10 +240,7 @@ def workon_axis(function):
         else:
             return new_outputs[0]
     wrapper = atleast_1d(wrapper)
-    if DEBUG:
-        return wraps(function)(wrapper)
-    else:
-        return wrapper
+    return wraps(function)(wrapper)
 
 
 ############

@@ -1,470 +1,301 @@
 import pytest
 import numpy as np
-from numpy.core.numeric import isclose
-import scipy.optimize
 import scipy.integrate as integrate
 from scipy.stats import norm
 
 import pymaat.testing as pt
-from pymaat.quantutil import voronoi_1d, inv_voronoi_1d
-from pymaat.quantutil import Optimizer
+from pymaat.quantutil import voronoi_1d, _assert_valid_delta_at
 from pymaat.nputil import diag_view
 
-from pymaat.garch.varquant import Quantization
-from pymaat.garch.varquant import _QuantizerFactory
-from pymaat.garch.varquant import _Quantizer
-from pymaat.quantutil import _Unconstrained1D
+import pymaat.garch.varquant as vq
 
 
-@pytest.fixture(params=[1, 4],
-                ids=['prev_size(1)',
-                     'prev_size(4)'])
-def prev_size(request):
-    return request.param
-
-
-@pytest.fixture(params=[2, 3],
-                ids=['size(2)',
-                     'size(3)'])
-@pytest.fixture
-def size(request):
+@pytest.fixture(params=[(1,), (4, 2), (3, 3), (1, 10)],
+                ids=['prev_shape(1)',
+                     'prev_shape(4,2)',
+                     'prev_shape(3,3)',
+                     'prev_shape(1,10)'
+                     ])
+def prev_shape(request):
     return request.param
 
 
 @pytest.fixture
-def previous(prev_size, variance_scale):
-    from_ = 0.75 * variance_scale
-    to_ = 1.25 * variance_scale
-    value = np.linspace(from_, to_, num=prev_size)
-    probability = np.ones((prev_size,))/prev_size
-    return Quantization(
-        value=value, probability=probability)
+def prev_proba(prev_shape):
+    p = np.random.uniform(
+        low=0.05,
+        high=1,
+        size=prev_shape)
+    p /= np.sum(p)  # Normalize
+    return p
 
 
 @pytest.fixture
-def factory(model, size, previous):
-    return _QuantizerFactory.make_from_prev(
-            model, size, False, previous)
+def prev_value(prev_shape, variance_scale):
+    np.random.seed(1234567)
+    v = np.random.uniform(
+        low=0.75*variance_scale,
+        high=1.25*variance_scale,
+        size=prev_shape)
+    return v
 
 
 @pytest.fixture
-def unc_factory(model, size, previous):
-    return _QuantizerFactory.make_from_prev(
-            model, size, True, previous)
-
-@pytest.fixture
-def shape(size):
-    return (size,)
+def low_z(prev_shape):
+    np.random.seed(58934345)
+    return 0.25 * np.random.normal(size=prev_shape)
 
 
 @pytest.fixture
-def x(random_normal):
-    return random_normal
+def high_z(prev_shape, low_z):
+    np.random.seed(9234795)
+    return low_z + np.fabs(np.random.normal(size=prev_shape))
 
 
 @pytest.fixture
-def value(factory, previous, size):
-    from_ = max(factory.min_value, 0.75*np.min(previous.value))
-    to_ = 1.25*np.max(previous.value)
-    return np.linspace(from_, to_, num=size)
+def factory(prev_proba, model, prev_value, low_z, high_z):
+    return vq._Factory(prev_proba, model, prev_value, low_z, high_z)
 
 
-@pytest.fixture
-def optimizer(unc_factory):
-    return Optimizer(unc_factory)
+class TestCore:
 
+    @pytest.fixture
+    def core(self, model, variance_scale):
+        return vq.Core(model, variance_scale, size=10, nper=21, verbose=True)
 
-@pytest.mark.slow
-def test_optimize(optimizer):
-    base_quant = optimizer.quick_optimize()
-    robust_quant = optimizer.optimize()
-    brute_quant = optimizer.brute_optimize()
-    # Same distortion
-    pt.assert_almost_equal(
-        base_quant.distortion,
-        brute_quant.distortion,
-        rtol=1e-4)
-    pt.assert_almost_equal(
-        robust_quant.distortion,
-        brute_quant.distortion,
-        rtol=1e-4)
-    # Same solution
-    pt.assert_almost_equal(
-        base_quant.value, brute_quant.value, rtol=1e-2)
-    pt.assert_almost_equal(
-        robust_quant.value, brute_quant.value, rtol=1e-2)
+    def test_optimize(self, core):
+        core.optimize()
 
-class TestQuantization:
-
-    def test_make_stub_from_valid_value_and_proba(self, value):
-        proba = np.ones_like(value)/value.size
-        quant = Quantization(value, proba)
-        pt.assert_almost_equal(quant.value, value)
-        pt.assert_almost_equal(quant.probability, proba)
-        assert quant.size == value.size
-        assert quant.shape == value.shape
-
-    @pytest.mark.parametrize("wrong", [np.nan, np.inf])
-    def test_make_stub_from_invalid_value_raises_value_error(
-            self, value, wrong):
-        invalid_value = np.append(value, [wrong])
-        proba = np.ones_like(invalid_value)/invalid_value.size
-        with pytest.raises(ValueError):
-            quant = Quantization(invalid_value, proba)
-
-    def test_make_stub_from_negative_raises_value_error(self, value):
-        invalid_value = np.append(value, [-1.])
-        proba = np.ones_like(invalid_value)/invalid_value.size
-        with pytest.raises(ValueError):
-            quant = Quantization(invalid_value, proba)
-
-    @pytest.mark.parametrize("wrong", [2., -1.])
-    def test_make_stub_from_invalid_proba_raises_value_error(
-            self, value, wrong):
-        proba = np.ones_like(value)/value.size
-        proba[0] = wrong
-        with pytest.raises(ValueError):
-            quant = Quantization(value, proba)
 
 class TestFactory:
 
-    def test__init__(self, model, factory, size, previous):
-        assert factory.model is model
-        assert factory.shape == (size,)
-        assert factory.size == size
+    def test_model(self, model, factory):
+        assert model is factory.model
 
-    def test_make_unconstrained(self, unc_factory, x):
-        quant = unc_factory.make(x)
-        quant = unc_factory.make(x)  # Query cache?
-        assert isinstance(quant, _Unconstrained1D)
-        pt.assert_almost_equal(quant.x, x, atol=1e-16)
+    def test_innov_bounds(self, low_z, high_z, factory):
+        pt.assert_almost_equal(factory.low_z, low_z)
+        pt.assert_almost_equal(factory.high_z, high_z)
 
-    def test_make_from_valid_value(self, factory, value):
+    def test_prev_value(self, prev_value, factory):
+        pt.assert_almost_equal(factory.prev_value, prev_value)
+
+    def test_prev_proba_when_no_z_proba(
+            self, factory, prev_proba, low_z, high_z):
+        # Normalize previous probability...
+        z_proba = norm.cdf(high_z) - norm.cdf(low_z)
+        expected = prev_proba / np.sum(prev_proba*z_proba)
+        pt.assert_almost_equal(expected, factory.prev_proba)
+
+    def test_search_bounds(self, factory):
+        b = factory.get_search_bounds(3.)
+        assert b[0].size == 1
+        assert b[1].size == 1
+        pt.assert_finite(b[0])
+        pt.assert_finite(b[1])
+        pt.assert_less(b[0], b[1])
+
+    def test_make_from_valid_value(self, factory):
+        np.random.seed(907831247)
+        bounds = factory.get_search_bounds(3.)
+        value = np.random.uniform(
+            low=bounds[0], high=bounds[1], size=10)
+        value.sort()  # Must be sorted!
         quant = factory.make(value)
-        quant = factory.make(value)  # Query cache?
-        assert isinstance(quant, _Quantizer)
-        assert not isinstance(quant, _Unconstrained1D)
-        pt.assert_almost_equal(quant.value, value)
+        assert isinstance(quant, vq._Quantizer)
 
-    def test_min_value(self, factory):
-        expected = factory.model.get_lowest_one_step_variance(
-            np.amin(factory.prev_value))
-        pt.assert_almost_equal(factory.min_value, expected)
+
+    @pytest.mark.parametrize("wrong", [np.nan, np.inf, -1., 2.])
+    def test_invalid_prev_proba_raises_value_error(
+            self, prev_proba, model, prev_value, wrong):
+        prev_proba[0] = wrong
+        with pytest.raises(ValueError):
+            vq._Factory(prev_proba, model, prev_value)
+
+    @pytest.mark.parametrize("wrong", [np.nan, np.inf, -1.])
+    def test_invalid_prev_value_raises_value_error(
+            self, prev_proba, model, prev_value, wrong):
+        prev_value[0] = wrong
+        with pytest.raises(ValueError):
+            vq._Factory(prev_proba, model, prev_value)
+
+    def test_invalid_innov_bounds_raises_value_error(
+            self, prev_shape, prev_proba, model, prev_value,
+            low_z, high_z):
+        with pytest.raises(ValueError):
+            vq._Factory(prev_proba, model, prev_value, high_z, low_z)
+
+    def test_prev_value_shape_mismatch_raises_value_error(self, model):
+        with pytest.raises(ValueError):
+            vq._Factory(np.array([1., 2.]), model, np.array(1.))
+
+    def test_innov_bounds_shape_mismatch_raises_value_error(self, model):
+        with pytest.raises(ValueError):
+            vq._Factory(np.array([1., 2.]), model,
+                            np.array([1., 2.]),
+                            low_z=np.array(1.),
+                            high_z=np.array(1.))
+        with pytest.raises(ValueError):
+            vq._Factory(np.array([1., 2.]), model,
+                            np.array([1., 2.]),
+                            low_z=np.array([1., 2.]),
+                            high_z=np.array(1.))
+        with pytest.raises(ValueError):
+            vq._Factory(np.array([1., 2.]), model,
+                            np.array([1., 2.]),
+                            low_z=np.array(1.),
+                            high_z=np.array([1., 2.]))
+
+    def test_z_proba_shape_mismatch_raises_value_error(self, model):
+        with pytest.raises(ValueError):
+            vq._Factory(np.array([1., 2.]), model,
+                            np.array([1., 2.]),
+                            low_z=np.array([1., 2.]),
+                            high_z=np.array([1., 2.]),
+                            z_proba=np.array(1.))
+
+    def test_default_when_no_innov_bounds(
+            self, prev_proba, model, prev_value):
+        f = vq._Factory(prev_proba, model, prev_value)
+        pt.assert_all(f.low_z == -np.inf)
+        pt.assert_all(f.high_z == np.inf)
+
+    def test_unchanged_prev_proba_when_no_innov_bounds(
+            self, prev_proba, model, prev_value):
+        f = vq._Factory(prev_proba, model, prev_value)
+        pt.assert_almost_equal(prev_proba, f.prev_proba)
+
+    def test_prev_proba_when_z_proba(
+            self, prev_proba, model, prev_value, low_z, high_z):
+        # Generate some transition probabilities
+        np.random.seed(1234567)
+        z_proba = np.random.uniform(
+            low=0.05,
+            high=0.95,
+            size=prev_proba.shape)
+        # Instantiate factory with transition probabilities
+        f = vq._Factory(
+            prev_proba, model, prev_value, low_z, high_z, z_proba)
+        # Expected previous probability
+        expected = prev_proba / np.sum(prev_proba*z_proba)
+        pt.assert_almost_equal(expected, f.prev_proba)
+
+    def test_unattainable_state_raises_value_error(
+            self, prev_shape, prev_proba, model, prev_value):
+        low_z = high_z = np.full(prev_shape, 1.)
+        with pytest.raises(ValueError):
+            f = vq._Factory(prev_proba, model, prev_value, low_z, high_z)
 
 
 class TestQuantizer:
 
-    DIST_RTOL = 1e-6
-    GRADIENT_RTOL = 1e-6
-    HESSIAN_RTOL = 1e-6
+    @pytest.fixture(params=[1, 2, 3, 5],
+                    ids=['size(1)',
+                         'size(2)',
+                         'size(3)',
+                         'size(5)'])
+    def size(self, request):
+        return request.param
 
     @pytest.fixture
-    def valid_quantizer(self, factory, value):
-        return factory.make(value)
-
-    # Special cases
-
-    @pytest.fixture
-    def singular_quantizer(self, factory, valid_quantizer):
-        first = None
-        if factory.singularities.size == 1:
-            first = 0.5*factory.singularities[0]
-
-        new_values = inv_voronoi_1d(
-            factory.singularities,
-            with_bounds=False,
-            first_quantizer=first)
-
-        until = min(factory.size, new_values.size)
-        value = valid_quantizer.value.copy()
-        value[:until] = new_values[:until]
+    def quantizer(self, size, factory):
+        np.random.seed(907831247)
+        bounds = factory.get_search_bounds(3.)
+        value = np.random.uniform(
+            low=bounds[0], high=bounds[1], size=size)
         value.sort()
-
-        quant = factory.make(value)
-
-        # Make sure Voronoi was not rounded
-        for i in range(quant.voronoi.size):
-            id_ = isclose(
-                quant.voronoi[i], factory.singularities, rtol=1e-15)
-            if any(id_):
-                quant.voronoi[i] = factory.singularities[id_]
-
-        return quant
-
-    @pytest.fixture
-    def flat_quantizer(self, factory, valid_quantizer):
-        value = valid_quantizer.value.copy()
-        value[0] = 0.5 * factory.min_value
-        if factory.size > 1:
-            value[1] = factory.min_value
         return factory.make(value)
 
-    # Tests
+    def test_model(self, model, quantizer):
+        assert model is quantizer.model
 
-    def test__init__invalid_parent_raises_value_error(self, valid_quantizer):
-        with pytest.raises(ValueError):
-            _Quantizer('invalid_parent', valid_quantizer)
+    def test_prev_value(self, prev_shape, prev_value, quantizer):
+        assert quantizer.prev_value.shape == prev_shape + (1,)
+        pt.assert_almost_equal(quantizer.prev_value[..., 0],
+                               prev_value)
 
-    def test__init__invalid_value_ndim_raises_value_error(self, factory):
-        invalid_value = np.array([[0., 1.], [2., 3.]])
-        with pytest.raises(ValueError):
-            _Quantizer(factory, invalid_value)
+    def test_low_z(self, prev_shape, low_z, quantizer):
+        assert quantizer.low_z.shape == prev_shape + (1,)
+        pt.assert_almost_equal(quantizer.low_z[..., 0],
+                               low_z)
 
-    def test__init__invalid_value_shape_raises_value_error(
-            self, factory, valid_quantizer):
-        invalid_value = np.append(valid_quantizer.value, [1.])
-        with pytest.raises(ValueError):
-            _Quantizer(factory, invalid_value)
-
-    def test__init__value_nan_raises_value_error(
-            self, factory, valid_quantizer):
-        invalid_value = valid_quantizer.value.copy()
-        invalid_value[0] = np.nan
-        with pytest.raises(ValueError):
-            _Quantizer(factory, invalid_value)
-
-    def test__init__value_infinite_raises_value_error(
-            self, factory, valid_quantizer):
-        invalid_value = valid_quantizer.value.copy()
-        invalid_value[0] = np.inf
-        with pytest.raises(ValueError):
-            _Quantizer(factory, invalid_value)
-
-    def test__init__non_increasing_value_raises_value_error(
-            self, factory, valid_quantizer):
-        if factory.size > 1:
-            invalid_value = valid_quantizer.value.copy()
-            invalid_value[[0, 1]] = valid_quantizer.value[[1, 0]]
-            with pytest.raises(ValueError):
-                _Quantizer(factory, invalid_value)
-
-    def test_value_has_no_nan(self, valid_quantizer):
-        pt.assert_valid(valid_quantizer.value)
-
-    def test_probability_shape(self, valid_quantizer):
-        expected = valid_quantizer.parent.shape
-        value = valid_quantizer.probability.shape
-        assert expected == value
-
-    def test_probability_sums_to_one_and_strictly_positive(
-            self, valid_quantizer):
-        pt.assert_greater(valid_quantizer.probability, 0.0,
-                          shape='broad')
-        pt.assert_almost_equal(np.sum(valid_quantizer.probability),
-                               1., rtol=1e-6, shape='broad')
-
-    def test_probability(self, previous, valid_quantizer):
-        value = valid_quantizer.probability
-        expected = previous.probability.dot(
-            valid_quantizer.transition_probability)
-        pt.assert_almost_equal(value, expected, rtol=1e-6)
-
-    def test_transition_probability_shape(self,
-                                          previous, valid_quantizer):
-        expected = (previous.value.size, valid_quantizer.parent.size)
-        value = valid_quantizer.transition_probability.shape
-        assert expected == value
-
-    def test_transition_probability_sums_to_one_and_non_negative(
-            self, valid_quantizer):
-        # Non negative...
-        pt.assert_greater_equal(valid_quantizer.transition_probability,
-                                0.0, shape='broad')
-        # Sums to one...
-        marginal_probability = np.sum(
-            valid_quantizer.transition_probability, axis=1)
-        pt.assert_almost_equal(marginal_probability, 1.0,
-                               shape='broad', rtol=1e-6)
-
-    def test_transition_probability(self, previous, valid_quantizer):
-        value = valid_quantizer.transition_probability
-        expected_value = valid_quantizer._integral[0]
-        pt.assert_almost_equal(value, expected_value, rtol=1e-12)
-
-    def test_distortion(self, previous, valid_quantizer):
-        # See below for _distortion_elements test
-        distortion = np.sum(valid_quantizer._distortion_elements, axis=1)
-        expected_value = previous.probability.dot(distortion)
-        value = valid_quantizer.distortion
-        pt.assert_almost_equal(expected_value, value, rtol=self.DIST_RTOL)
-
-    def test_gradient(self, factory, valid_quantizer):
-        pt.assert_gradient_at(valid_quantizer.gradient,
-                              valid_quantizer.value,
-                              function=lambda x: factory.make(x).distortion,
-                              rtol=self.GRADIENT_RTOL)
-
-    def test_gradient_at_flat(self, factory, flat_quantizer):
-        if factory.size > 1:
-            assert flat_quantizer.gradient[0] == 0.
-
-    def test_hessian(self, factory, valid_quantizer):
-        pt.assert_hessian_at(valid_quantizer.hessian,
-                             valid_quantizer.value,
-                             gradient=lambda x: factory.make(x).gradient,
-                             rtol=self.HESSIAN_RTOL)
-
-    def test_hessian_is_symmetric(self, valid_quantizer):
-        pt.assert_equal(valid_quantizer.hessian,
-                        np.transpose(valid_quantizer.hessian))
-
-    # Testing distortion...
-
-    def test_distortion_elements(self, model, previous, valid_quantizer):
-        expected_value = numerical_quantized_integral(
-            model, previous, valid_quantizer.value, distortion=True)
-        value = valid_quantizer._distortion_elements
-        pt.assert_almost_equal(value, expected_value, rtol=1e-6)
-
-    def test_distortion_elements_at_flat(self, factory, flat_quantizer):
-        if factory.size > 1:
-            pt.assert_equal(
-                flat_quantizer._distortion_elements[:, 0], 0.,
-                shape='broad')
-
-    # Testing quantized integrals...
-
-    @pytest.mark.parametrize("order_rtol", [(0, 1e-8), (1, 1e-6), (2, 1e-3)])
-    def test_integral(self, model, previous, valid_quantizer, order_rtol):
-        order, rtol = order_rtol
-        expected_value = numerical_quantized_integral(
-            model, previous, valid_quantizer.value, order=order)
-        value = valid_quantizer._integral[order]
-        pt.assert_almost_equal(value, expected_value, rtol=rtol, atol=1e-32)
-
-    def test_delta_at_singularity_is_zero(self, previous, factory,
-                                          singular_quantizer):
-        voronoi = singular_quantizer.voronoi
-        delta = singular_quantizer._delta
-        for (ii, sing) in enumerate(factory.singularities):
-            id_ = isclose(sing, voronoi)
-            if np.any(id_):
-                assert np.sum(id_) == 1
-                pt.assert_all(delta[0][ii, id_] == 0.)
-                pt.assert_all(delta[1][ii, id_] == 0.)
+    def test_high_z(self, prev_shape, high_z, quantizer):
+        assert quantizer.high_z.shape == prev_shape + (1,)
+        pt.assert_almost_equal(quantizer.high_z[..., 0],
+                               high_z)
 
     @pytest.mark.parametrize("right", [False, True])
-    def test_roots_shape(self, valid_quantizer, right):
-        expected_shape = (valid_quantizer.parent.prev_size,
-                          valid_quantizer.parent.size+1)
-        assert valid_quantizer._roots[right].shape == expected_shape
+    def test_roots_shape(self, factory, quantizer, right):
+        expected_shape = factory.prev_proba.shape + (quantizer.size+1,)
+        assert quantizer._roots[right].shape == expected_shape
 
-    # Voronoi
+    @pytest.mark.parametrize("order", [0, 1, 2])
+    def test_integral(self, factory, quantizer, order):
+        # Compute expected integral for all previous values
+        it = np.nditer(factory.prev_value, flags=['multi_index'])
+        expected = np.empty(factory.prev_value.shape + (quantizer.size,))
+        while not it.finished:
+            expected[it.multi_index] = _quantized_integral(
+                factory.model,
+                factory.prev_value[it.multi_index],
+                factory.low_z[it.multi_index],
+                factory.high_z[it.multi_index],
+                quantizer.value,
+                order=order)
+            it.iternext()
+        pt.assert_almost_equal(
+            quantizer._integral[order],
+            expected,
+            rtol=1e-8, atol=1e-32)
 
-    def test_voronoi(self, valid_quantizer):
-        v = valid_quantizer.voronoi
-        assert v[0] == 0.
-        pt.assert_almost_equal(v, voronoi_1d(valid_quantizer.value, lb=0))
+    @pytest.mark.parametrize("order", [0, 1])
+    def test_delta(self, factory, size, order):
+        np.random.seed(1234423)
+        bounds = factory.get_search_bounds(3.)
+        value = np.random.uniform(
+            low=bounds[0], high=bounds[1], size=size)
+        value.sort()
+        _assert_valid_delta_at(factory, value, order)
 
+########################
+## Helper Function(s) #
+########################
 
-class TestUnconstrained():
-
-    RTOL_GRADIENT = 1e-6
-    RTOL_HESSIAN = 1e-6
-
-    @pytest.fixture
-    def unc(self, unc_factory, x):
-        return unc_factory.make(x)
-
-    def test_value_is_in_space(self, unc):
-        pt.assert_finite(unc.quantizer.value)
-        # strictly increasing
-        pt.assert_greater(np.diff(unc.quantizer.value), 0.0, shape='broad')
-        pt.assert_greater(
-            unc.quantizer.value, unc.parent.min_value, shape='broad')
-
-    def test_gradient(self, unc_factory, x, unc):
-        pt.assert_gradient_at(
-            unc.gradient, x, rtol=self.RTOL_GRADIENT,
-            function=lambda x_: unc_factory.make(x_).distortion
-        )
-
-    def test_hessian(self, unc_factory, x, unc):
-        pt.assert_hessian_at(
-            unc.hessian, x, rtol=self.RTOL_HESSIAN,
-            gradient=lambda x_: unc_factory.make(x_).gradient
-        )
-
-    def test_jacobian(self, unc_factory, x, unc):
-        pt.assert_jacobian_at(
-            unc._jacobian,
-            x, rtol=1e-8,
-            function=lambda x_: unc_factory.make(x_).quantizer.value
-        )
-
-    def test_scaled_exponential_of_x(self, unc_factory, unc):
-        expected_value = np.exp(unc.x) * unc_factory.min_value / (unc.size+1)
-        pt.assert_almost_equal(unc._scaled_expx, expected_value, rtol=1e-12)
-
-    def test_changed_variable(self, unc_factory, unc):
-        expected_value = unc_factory.min_value + np.cumsum(unc._scaled_expx)
-        pt.assert_almost_equal(unc.quantizer.value,
-                expected_value, rtol=1e-12)
-
-    def test_inv_change_variable_reverts(self, unc_factory, unc):
-        x = unc_factory.inv_change_of_variable(unc.quantizer.value)
-        pt.assert_almost_equal(x, unc.x, rtol=1e-6)
-
-
-#######################
-# Helper Function(s) #
-#######################
-
-
-def numerical_quantized_integral(model, previous, value, *,
-                                 order=None,
-                                 distortion=False):
-    """
-    This helper function numerically estimates (via quadrature)
-    an integral (specified by order or distortion)
-    over quantized tiles
-    """
-    # Setup integrand
-    if order is not None:
-        if order == 0:
-            def integrand(z, H, h): return norm.pdf(z)
-        elif order == 1:
-            def integrand(z, H, h): return H * norm.pdf(z)
-        elif order == 2:
-            def integrand(z, H, h): return H**2. * norm.pdf(z)
-        else:
-            assert False  # Should never happen...
-    elif distortion:
-        def integrand(z, H, h): return (H-h)**2. * norm.pdf(z)
+def _quantized_integral(
+        model, prev_value, low_z, high_z, value, *, order=None):
+    if order == 0:
+        def integrand(z,H): return norm.pdf(z)
+    elif order == 1:
+        def integrand(z,H): return H*norm.pdf(z)
+    elif order == 2:
+        def integrand(z,H): return H**2.*norm.pdf(z)
     else:
-        assert False  # Should never happen...
+        assert False  # should never happen...
 
-    def do_quantized_integration(lb, ub, prev_variance, value):
-        assert prev_variance.size == 1
-        assert value.size == 1
-        # Define function to integrate
-
+    def do_quantized_integration(low_h, high_h):
         def function_to_integrate(innov):
-            assert isinstance(innov, float)
-            # 0 if innovation is between tile bounds else integrate
-            next_variance, _ = model.one_step_generate(
-                innov, prev_variance)
-            # assert (next_variance >= lb and next_variance <= ub)
-            return integrand(innov, next_variance, value)
-
+            next_variance, _ = model.one_step_generate(innov, prev_value)
+            return integrand(innov, next_variance)
         # Identify integration intervals
-        (b, c) = model.real_roots(prev_variance, lb)
-        if ub == np.inf:
+        (b, c) = model.real_roots(prev_value, low_h)
+        if high_h == np.inf:
             # Crop integral to improve numerical accuracy
             CROP = 10.
             a = min(-CROP, b)
             d = max(CROP, c)
         else:
-            (a, d) = model.real_roots(prev_variance, ub)
+            (a, d) = model.real_roots(prev_value, high_h)
+        a = max(a, low_z)
+        b = min(b, high_z)
+        b = max(a, b)
+        c = max(c, low_z)
+        d = min(d, high_z)
+        d = max(c, d)
         # Perform integration by quadrature
         return (integrate.quad(function_to_integrate, a, b)[0]
                 + integrate.quad(function_to_integrate, c, d)[0])
-
-    # Perform Integration
-    voronoi = voronoi_1d(value, lb=0.)
-    I = np.empty((previous.value.size, value.size))
-    for (i, prev_h) in enumerate(previous.value):
-        for (j, (lb, ub, h)) in enumerate(
-                zip(voronoi[:-1], voronoi[1:], value)):
-            I[i, j] = do_quantized_integration(lb, ub, prev_h, h)
-    return I
+    # Perform integration for each value
+    vor = voronoi_1d(np.ravel(value), lb=0.)
+    out = np.empty((value.size,))
+    for j in range(value.size):
+        out[j] = do_quantized_integration(vor[j], vor[j+1])
+    return out

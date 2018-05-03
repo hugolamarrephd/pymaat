@@ -17,8 +17,8 @@ import matplotlib.colorbar
 import pymaat.plotutil
 from pymaat.mathutil import round_to_int
 
-class Core(pymaat.quantutil.AbstractCore):
 
+class Core(pymaat.quantutil.AbstractCore):
 
     def __init__(self, model, first_variance,
                  price_size=100, variance_size=100,
@@ -45,7 +45,7 @@ class Core(pymaat.quantutil.AbstractCore):
         fig = plt.figure()
 
         # Compute bounds
-        all_quant = self.all_quant[1:] # Disregard time 0
+        all_quant = self.all_quant[1:]  # Disregard time 0
         all_vol = np.concatenate(
             [self.variance_formatter(q.variance).ravel() for q in all_quant])
         all_price = np.concatenate(
@@ -54,11 +54,11 @@ class Core(pymaat.quantutil.AbstractCore):
             [100.*q.probability.ravel() for q in all_quant])
         m = 0
         vol_bounds = pymaat.plotutil.get_lim(
-                all_vol, lb=0., margin=m)
+            all_vol, lb=0., margin=m)
         price_bounds = pymaat.plotutil.get_lim(
-                all_price, lb=0., margin=m)
+            all_price, lb=0., margin=m)
         proba_bounds = pymaat.plotutil.get_lim(
-                all_probas, lb=0., ub=100., margin=m)
+            all_probas, lb=0., ub=100., margin=m)
 
         # Initialize color map
         cmap = matplotlib.cm.get_cmap('gnuplot2')
@@ -68,19 +68,20 @@ class Core(pymaat.quantutil.AbstractCore):
 
         step = math.floor(len(all_quant)/9)
         selected = list(range(0, len(all_quant), step))
-        fd = {'fontsize':8}
+        fd = {'fontsize': 8}
 
         for t in range(9):
-            ax = fig.add_subplot(3,3,t+1)
+            ax = fig.add_subplot(3, 3, t+1)
             quant = all_quant[selected[t]]
-            # Plot tiles
+
+            # Tiles
             vprice = self.price_formatter(quant.voronoi_price)
             vprice[0] = price_bounds[0]
             vprice[-1] = price_bounds[1]
             for idx in range(quant.shape[0]):
                 x_tiles = vprice[idx:idx+2]
                 y_tiles = self.variance_formatter(
-                        quant.voronoi_variance[idx])
+                    quant.voronoi_variance[idx])
                 y_tiles[0] = vol_bounds[0]
                 y_tiles[-1] = vol_bounds[1]
                 x_tiles, y_tiles = np.meshgrid(x_tiles, y_tiles)
@@ -89,17 +90,21 @@ class Core(pymaat.quantutil.AbstractCore):
                     100.*quant.probability[idx][:, np.newaxis],
                     cmap=cmap, norm=norm)
 
-            #  Plot quantizer
-            bprice = np.broadcast_to(quant.price[:,np.newaxis], quant.shape)
+            # Quantizers
+
+            bprice = np.broadcast_to(quant.price[:, np.newaxis], quant.shape)
             x_pts = self.price_formatter(bprice)
             y_pts = self.variance_formatter(quant.variance)
-            ax.scatter(x_pts, y_pts, c='k', s=2, marker=".")
+            ax.scatter(x_pts.ravel(),
+                       y_pts.ravel(),
+                       c=cmap(norm(100.*quant.probability.ravel())),
+                       s=2, marker=".")
 
             # Title
             ax.set_title('t={}'.format(selected[t]+1), fontdict=fd, y=0.95)
 
             # Y-Axis
-            if t in [0,3,6]:
+            if t in [0, 3, 6]:
                 lb = round_to_int(vol_bounds[0], base=5, fcn=math.floor)
                 ub = round_to_int(vol_bounds[1], base=5, fcn=math.ceil)
                 tickspace = round_to_int((ub-lb)/5, base=5, fcn=math.ceil)
@@ -107,14 +112,13 @@ class Core(pymaat.quantutil.AbstractCore):
                 ticks = np.unique(np.append(ticks, ub))
                 labels = ['{0:d}'.format(yt) for yt in ticks]
                 ax.set_ylabel(r'Annual Vol. (%)', fontdict=fd)
-                ax.set_ylim(vol_bounds)
                 ax.set_yticks(ticks)
                 ax.set_yticklabels(labels, fontdict=fd)
             else:
                 ax.yaxis.set_ticks([])
 
             # X-Axis
-            if t in [6,7,8]:
+            if t in [6, 7, 8]:
                 lb = round_to_int(price_bounds[0], base=5, fcn=math.floor)
                 ub = round_to_int(price_bounds[1], base=5, fcn=math.ceil)
                 tickspace = round_to_int((ub-lb)/5, base=5, fcn=math.ceil)
@@ -122,11 +126,13 @@ class Core(pymaat.quantutil.AbstractCore):
                 ticks = np.unique(np.append(ticks, ub))
                 labels = ['{0:d}'.format(xt) for xt in ticks]
                 ax.set_xlabel(r'Price (%)', fontdict=fd)
-                ax.set_xlim(price_bounds)
                 ax.set_xticks(ticks)
                 ax.set_xticklabels(labels, fontdict=fd)
             else:
                 ax.xaxis.set_ticks([])
+
+            ax.set_ylim(vol_bounds)
+            ax.set_xlim(price_bounds)
 
         # Add colorbar
         cbar_ax = fig.add_axes([0.925, 0.1, 0.025, 0.79])
@@ -136,7 +142,6 @@ class Core(pymaat.quantutil.AbstractCore):
         cbar_ax.set_yticklabels(cbar_ax.get_yticklabels(), fontdict=fd)
         # cbar_ax.set_xlabel(r'%', fontdict=fd)
         cbar_ax.set_title('Proba. (%)', fontdict=fd)
-
 
     # Internals
     def _get_all_shapes(self):
@@ -168,13 +173,13 @@ class Core(pymaat.quantutil.AbstractCore):
         return Quantization(price, variance, probability)
 
     def _one_step_optimize(self, shape, previous, *,
-            verbose=True, fast=True):
+                           verbose=True, fast=True):
 
         def optimize_price_quantizer():
             factory = _PriceFactory(self.model, shape[0], True,
-                    prev_proba=previous.probability,
-                    prev_variance=previous.variance,
-                    prev_price=previous.price)
+                                    prev_proba=previous.probability,
+                                    prev_variance=previous.variance,
+                                    prev_price=previous.price)
             optimizer = pymaat.quantutil.Optimizer(factory)
             if fast:
                 result = optimizer.quick_optimize(verbose=verbose)
@@ -189,13 +194,13 @@ class Core(pymaat.quantutil.AbstractCore):
 
         def optimize_variance_quantizer_conditional_on(idx):
             # Compute root bounds
-            rb = price_quant._roots[:,:,idx:idx+2]
+            rb = price_quant._roots[:, :, idx:idx+2]
             rb = np.moveaxis(rb, 2, 0)
             factory = pymaat.garch.varquant._Factory(
-                    self.model, shape[1], True,
-                    prev_proba = previous.probability,
-                    prev_value = previous.variance,
-                    root_bounds = rb)
+                self.model, shape[1], True,
+                prev_proba=previous.probability,
+                prev_value=previous.variance,
+                root_bounds=rb)
             optimizer = pymaat.quantutil.Optimizer(factory)
             if fast:
                 result = optimizer.quick_optimize(verbose=verbose)
@@ -210,59 +215,40 @@ class Core(pymaat.quantutil.AbstractCore):
             if verbose:
                 msg = "[idx={0}] Conditional Variance Quantizer".format(idx)
                 msg += " (price={0:.2f}%)".format(
-                        self.price_formatter(price_quant.value[idx]))
+                    self.price_formatter(price_quant.value[idx]))
                 print(msg)
             all_var_quant[idx] = \
-                    optimize_variance_quantizer_conditional_on(idx)
+                optimize_variance_quantizer_conditional_on(idx)
 
         # Merge results
         price = price_quant.value
         variance = np.empty(shape)
         transition_probability = np.empty(previous.shape + shape)
-        for (idx,q) in enumerate(all_var_quant):
-            variance[idx,:] = q.value
-            transition_probability[:,:,idx,:] = q.transition_probability
+        for (idx, q) in enumerate(all_var_quant):
+            variance[idx, :] = q.value
+            transition_probability[:, :, idx, :] = q.transition_probability
         probability = np.einsum(
-                'ij,ijkl',
-                previous.probability,
-                transition_probability)
+            'ij,ijkl',
+            previous.probability,
+            transition_probability)
 
         return Quantization(price, variance, probability,
-                transition_probability)
+                            transition_probability)
 
 
 class Quantization(pymaat.quantutil.AbstractQuantization):
 
     dtype = np.dtype([('price', np.float_), ('variance', np.float_)])
 
-    def __init__(
-            self, price, variance, probability, transition_probability=None):
-        if np.any(~np.isfinite(price)):
-            err_msg = 'Invalid prices: NaNs or infinite\n'
-        elif np.any(price <= 0.):
-            err_msg = 'Invalid prices: must be strictly positive\n'
-        elif np.any(~np.isfinite(variance)):
-            err_msg = 'Invalid variances: NaNs or infinite\n'
-        elif np.any(variance <= 0.):
-            err_msg = 'Invalid variances: must be strictly positive\n'
-        elif probability.shape != variance.shape:
-            err_msg = 'Invalid probabilities: size mismatch\n'
-        elif np.abs(np.sum(probability)-1.) > 1e-12:
-            err_msg = 'Invalid probabilities: must sum to one\n'
-        elif np.any(probability <= 0.):
-            err_msg = 'Invalid probabilities: must be strictly positive\n'
+    def __init__(self, price, variance, probability,
+            transition_probability=None):
+        # Checks
+        self._check_positive_value(price)
+        self._check_positive_value(variance)
+        self._check_proba(probability)
         if transition_probability is not None:
-            if np.any(transition_probability < 0.):
-                err_msg = ('Invalid transition probabilities:'
-                    ' must be positive\n')
-            elif np.any(
-                    np.abs(np.sum(transition_probability, axis=(2,3))-1.)
-                    > 1e-12
-                    ):
-                err_msg = ('Invalid transition probabilities:'
-                    ' must sum to one\n')
-        if 'err_msg' in locals():
-            raise ValueError(err_msg)
+            self._check_trans(transition_probability, (2,3))
+
         self.price = price
         self.variance = variance
         self.probability = probability
@@ -270,25 +256,29 @@ class Quantization(pymaat.quantutil.AbstractQuantization):
         self.shape = self.variance.shape
         self.size = self.variance.size
         self.ndim = self.variance.ndim
+
+        # Set value
+        value = np.empty(self.shape, self.dtype)
+        value['price'] = self.price[:, np.newaxis]
+        value['variance'] = self.variance
+        self._check_match_shape(probability,
+                value['price'], value['variance'])
+        self.value = value
+
+        # Voronoi tiles
         self.voronoi_price = pymaat.quantutil.voronoi_1d(self.price)
         self.voronoi_variance = np.empty((self.shape[0], self.shape[1]+1))
         for idx in range(self.shape[0]):
-            self.voronoi_variance[idx,:] = pymaat.quantutil.voronoi_1d(
-                    self.variance[idx,:])
-
-    @property
-    def value(self):
-        out = np.empty(self.shape, self.dtype)
-        out['price'] = self.price[:, np.newaxis]
-        out['variance'] = self.variance
-        return out
+            self.voronoi_variance[idx, :] = pymaat.quantutil.voronoi_1d(
+                self.variance[idx, :])
 
     def quantize(self, values):
         out = np.empty_like(values)
-        price_idx = np.digitize(values['price'] , self.voronoi_price)
+        price_idx = np.digitize(values['price'], self.voronoi_price)
         out['price'] = self.price[price_idx-1]
         # TODO: QUANTIZE VARIANCE
         return out
+
 
 class _PriceQuantizer(pymaat.quantutil.AbstractQuantizer1D):
 
@@ -329,7 +319,7 @@ class _PriceQuantizer(pymaat.quantutil.AbstractQuantizer1D):
             self.broad_voronoi,
             self.parent.prev_variance)
         delta0 = np.zeros_like(dX)
-        delta0[...,1:] = 0.5 * norm.pdf(self._roots[...,1:]) * dX[...,1:]
+        delta0[..., 1:] = 0.5 * norm.pdf(self._roots[..., 1:]) * dX[..., 1:]
 
         # Delta(1)
         delta1 = np.zeros_like(delta0)
@@ -349,17 +339,13 @@ class _PriceFactory(pymaat.quantutil.AbstractFactory1D):
     target = _PriceQuantizer
 
     def __init__(self, model, size, unc_flag, *,
-            prev_proba, prev_variance, prev_price):
+                 prev_proba, prev_variance, prev_price):
         return_scale = np.sqrt(np.amax(prev_variance))
-        min_value = np.amin(prev_price) * np.exp(-10.*return_scale)
-        max_value = np.amax(prev_price) * np.exp(10.*return_scale)
-        scale_value = max_value-min_value
-
+        min_value = np.amin(prev_price) * np.exp(-3.*return_scale)
+        max_value = np.amax(prev_price) * np.exp(3.*return_scale)
         super().__init__(model, size, unc_flag,
                          voronoi_bounds=[0, np.inf],
                          prev_proba=prev_proba,
-                         min_value=min_value,
-                         scale_value=scale_value)
-
+                         bounds=(min_value,max_value))
         self.prev_variance = prev_variance[:, :, np.newaxis]
         self.prev_price = prev_price[:, np.newaxis, np.newaxis]
