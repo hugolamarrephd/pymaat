@@ -1,351 +1,371 @@
-import math
-
+import os
 import numpy as np
-from scipy.stats import norm
+from multiprocessing import Pool
+from functools import partial
 
-from pymaat.nputil import printoptions
-from pymaat.util import lazy_property
-
-import pymaat.quantutil
+import pymaat.quantutil as qutil
 import pymaat.garch.varquant
-import pymaat.garch.format
+import pymaat.garch.pricequant
+from pymaat.garch.format import variance_formatter, base_price
 
-import matplotlib.pyplot as plt
-import matplotlib.cm
-import matplotlib.colors
-import matplotlib.colorbar
-import pymaat.plotutil
-from pymaat.mathutil import round_to_int
+import pymaat.testing as pt
+from pymaat.nputil import printoptions
+import time
 
+def plot(model, quantization, ax, cax=None, freq='daily', lim=None,
+        plim=None, show_quantizer=True):
+    from matplotlib.patches import Polygon
+    f = [base_price, variance_formatter(freq)]
+    quantization.plot2d(ax, cax, formatters=f, lim=lim, plim=plim,
+            show_quantizer=show_quantizer)
 
-class Core(pymaat.quantutil.AbstractCore):
+class AbstractCore(qutil.AbstractCore):
 
-    def __init__(self, model, first_variance,
-                 price_size=100, variance_size=100,
-                 first_price=1., first_probability=1.,
-                 nper=None, freq='daily'):
-        super().__init__(model)
-        self.nper = nper
-        self.variance_size = variance_size
-        self.price_size = price_size
-        self.first_variance = first_variance
-        self.first_price = first_price
-        self.first_probability = first_probability
-        self.variance_formatter = \
-            pymaat.garch.format.variance_formatter(freq)
-        self.price_formatter = pymaat.garch.format.base_price
+    def __init__(self,
+                model,
+                size,
+                nper=None,
+                freq='daily',
+                first_variance=None,
+                first_price=1.,
+                first_probability=1.,
+                verbose=False
+                ):
+        self.model = model
+        shapes = self._get_shapes(size, nper)
+        if first_variance is None:
+            first_variance = self._get_default_first_variance(freq)
+        first_quant = self._make_first_quant(
+            first_price, first_variance, first_probability)
+        super().__init__(shapes, first_quant, verbose)
+        self._variance_formatter = variance_formatter(freq)
+        self._price_formatter = base_price
+        # TODO used frequency to set weight
+        self._weight = np.array([1e1, 1e4])
 
-    def print_formatter(self, value):
-        value = value.copy()
-        value['price'] = self.price_formatter(value['price'])
-        value['variance'] = self.variance_formatter(value['variance'])
-        return value
-
-    def plot_values_3_by_3(self):
-        fig = plt.figure()
-
-        # Compute bounds
-        all_quant = self.all_quant[1:]  # Disregard time 0
-        all_vol = np.concatenate(
-            [self.variance_formatter(q.variance).ravel() for q in all_quant])
-        all_price = np.concatenate(
-            [self.price_formatter(q.price) for q in all_quant])
-        all_probas = np.concatenate(
-            [100.*q.probability.ravel() for q in all_quant])
-        m = 0
-        vol_bounds = pymaat.plotutil.get_lim(
-            all_vol, lb=0., margin=m)
-        price_bounds = pymaat.plotutil.get_lim(
-            all_price, lb=0., margin=m)
-        proba_bounds = pymaat.plotutil.get_lim(
-            all_probas, lb=0., ub=100., margin=m)
-
-        # Initialize color map
-        cmap = matplotlib.cm.get_cmap('gnuplot2')
-        cmap = cmap.reversed()
-        norm = matplotlib.colors.Normalize(vmin=proba_bounds[0],
-                                           vmax=proba_bounds[1])
-
-        step = math.floor(len(all_quant)/9)
-        selected = list(range(0, len(all_quant), step))
-        fd = {'fontsize': 8}
-
-        for t in range(9):
-            ax = fig.add_subplot(3, 3, t+1)
-            quant = all_quant[selected[t]]
-
-            # Tiles
-            vprice = self.price_formatter(quant.voronoi_price)
-            vprice[0] = price_bounds[0]
-            vprice[-1] = price_bounds[1]
-            for idx in range(quant.shape[0]):
-                x_tiles = vprice[idx:idx+2]
-                y_tiles = self.variance_formatter(
-                    quant.voronoi_variance[idx])
-                y_tiles[0] = vol_bounds[0]
-                y_tiles[-1] = vol_bounds[1]
-                x_tiles, y_tiles = np.meshgrid(x_tiles, y_tiles)
-                ax.pcolor(
-                    x_tiles, y_tiles,
-                    100.*quant.probability[idx][:, np.newaxis],
-                    cmap=cmap, norm=norm)
-
-            # Quantizers
-
-            bprice = np.broadcast_to(quant.price[:, np.newaxis], quant.shape)
-            x_pts = self.price_formatter(bprice)
-            y_pts = self.variance_formatter(quant.variance)
-            ax.scatter(x_pts.ravel(),
-                       y_pts.ravel(),
-                       c=cmap(norm(100.*quant.probability.ravel())),
-                       s=2, marker=".")
-
-            # Title
-            ax.set_title('t={}'.format(selected[t]+1), fontdict=fd, y=0.95)
-
-            # Y-Axis
-            if t in [0, 3, 6]:
-                lb = round_to_int(vol_bounds[0], base=5, fcn=math.floor)
-                ub = round_to_int(vol_bounds[1], base=5, fcn=math.ceil)
-                tickspace = round_to_int((ub-lb)/5, base=5, fcn=math.ceil)
-                ticks = np.arange(lb, ub, tickspace)
-                ticks = np.unique(np.append(ticks, ub))
-                labels = ['{0:d}'.format(yt) for yt in ticks]
-                ax.set_ylabel(r'Annual Vol. (%)', fontdict=fd)
-                ax.set_yticks(ticks)
-                ax.set_yticklabels(labels, fontdict=fd)
+    def _get_default_first_variance(self, freq):
+            if freq.lower() == 'daily':
+                return (0.18**2.)/252.
+            elif freq.lower() == 'weekly':
+                return (0.18**2.)/52.
+            elif freq.lower() == 'monthly':
+                return (0.18**2.)/12.
+            elif freq.lower() == 'yearly':
+                return 0.18**2.
             else:
-                ax.yaxis.set_ticks([])
+                raise ValueError("Unexpected frequency")
 
-            # X-Axis
-            if t in [6, 7, 8]:
-                lb = round_to_int(price_bounds[0], base=5, fcn=math.floor)
-                ub = round_to_int(price_bounds[1], base=5, fcn=math.ceil)
-                tickspace = round_to_int((ub-lb)/5, base=5, fcn=math.ceil)
-                ticks = np.arange(lb, ub, tickspace)
-                ticks = np.unique(np.append(ticks, ub))
-                labels = ['{0:d}'.format(xt) for xt in ticks]
-                ax.set_xlabel(r'Price (%)', fontdict=fd)
-                ax.set_xticks(ticks)
-                ax.set_xticklabels(labels, fontdict=fd)
-            else:
-                ax.xaxis.set_ticks([])
+    def _get_shapes(self, size, nper):
+        raise NotImplementedError
 
-            ax.set_ylim(vol_bounds)
-            ax.set_xlim(price_bounds)
+    def _make_first_quant(self, price, variance, probability):
+        raise NotImplementedError
 
-        # Add colorbar
-        cbar_ax = fig.add_axes([0.925, 0.1, 0.025, 0.79])
-        matplotlib.colorbar.ColorbarBase(
-            cbar_ax, cmap=cmap, norm=norm,
-            orientation='vertical')
-        cbar_ax.set_yticklabels(cbar_ax.get_yticklabels(), fontdict=fd)
-        # cbar_ax.set_xlabel(r'%', fontdict=fd)
-        cbar_ax.set_title('Proba. (%)', fontdict=fd)
+class AbstractVoronoiCore(AbstractCore):
 
-    # Internals
-    def _get_all_shapes(self):
-        if self.nper is not None:
-            price_size = np.broadcast_to(
-                self.price_size, (self.nper,))
-            variance_size = np.broadcast_to(
-                self.variance_size, (self.nper,))
+    _bounds = np.array([[0.,0.],[np.inf,np.inf]])
+
+    def __init__(self, *args, nsim=1000000, **kwargs):
+        self.nsim = nsim
+        super().__init__(*args, **kwargs)
+
+    def _get_shapes(self, size, nper):
+        if nper is not None:
+            return np.broadcast_to(size, (nper,))
         else:
-            price_size = np.ravel(self.price_size)
-            variance_size = np.ravel(self.variance_size)
+            return np.ravel(size)
 
+    def _make_first_quant(self, price, variance, probability):
+        quant = qutil.VoronoiQuantization(
+                np.column_stack((price, variance)),
+                self._bounds,
+                self._weight
+                )
+        quant.set_probability(probability)
+        self._first_idx = np.random.choice(
+                quant.size,
+                self.nsim,
+                p=quant.probability
+                )
+        return quant
+
+    def _initialize_hook(self):
+        self._previous_idx = self._first_idx
+
+    def _one_step_optimize(self, t, shape, previous):
+        simul = self._get_simulation(t, previous, self._previous_idx)
+        if simul.shape[0] <= shape:
+            raise ValueError("Number of simulations must be greater"
+                    "than desired quantizer size")
+        else:
+            starting_at = simul[-shape:,:]
+            assert starting_at.shape[0] == shape
+        quant = qutil.VoronoiQuantization.stochastic_optimization(
+                    starting_at,
+                    simul,
+                    nclvq=shape,
+                    nlloyd=10,
+                    weight=self._weight,
+                    bounds=self._bounds
+                    )
+        idx = quant._digitize(simul)
+        # Make sure all states are observed at least once
+        unobserved = np.logical_not(
+                np.isin(np.arange(quant.size), idx)
+                )
+        if np.any(unobserved):
+            raise UnobservedState
+        # Set quantization properties (probabilities, distortion, etc.)
+        quant.set_previous(previous)
+        quant._estimate_and_set_all_probabilities(idx, previous_idx)
+        quant._estimate_and_set_distortion(simul, idx)
+        self._previous_idx = idx
+        return quant
+
+    def _get_simulation(self, t, previous, previous_idx):
+        raise NotImplementedError
+
+class Marginal(AbstractVoronoiCore):
+
+    def _initialize_hook(self):
+        super()._initialize_hook()
+        first = self._first_quantization.quantizer[self._first_idx,:]
+        self._simul = self._do_all_simulation(first, len(self._shapes))
+
+    def _get_simulation(self, t, previous, previous_idx):
+        return self._simul[t]
+
+    @staticmethod
+    def _do_all_simulation(first, until):
+        p0 = first[:,0]
+        h0 = first[:,1]
+        nsim = first.shape[0]
+        innovations = np.random.normal(size=(until, nsim))
+        variances, returns = model.timeseries_generate(
+                innovations, h0[np.newaxis,:])
+        returns = np.vstack((np.zeros((1,nsim)),returns))
+        prices = p0[np.newaxis,:]*np.exp(np.cumsum(returns, axis=0))
+        # Format...
+        values = []
+        for (p,v) in zip(prices, variances):
+            values.append(np.column_stack((p,v)))
+        assert len(values)==until+1
+        assert np.all(values[0][:,0]==p0)
+        assert np.all(prices[0][:,1]==h0)
+        return values
+
+class Markov(AbstractVoronoiCore):
+
+    def _get_simulation(self, t, previous, previous_idx):
+        return self._do_one_step_simulation(previous, previous_idx)
+
+    @staticmethod
+    def do_one_step_simulation(quant, idx):
+        assert quant.probability is not None
+        nsim = idx.size
+        p0 = quant.quantizer[idx,0]
+        h0 = quant.quantizer[idx,1]
+        innovations = np.random.normal(size=nsim)
+        variances, returns = model.one_step_generate(
+                innovations, h0[np.newaxis,:])
+        prices = p0[np.newaxis,:] * np.exp(returns)
+        return np.column_stack((prices,variances))
+
+class AbstractGridCore(AbstractCore):
+
+    _price_bounds = _variance_bounds = np.array([0., np.inf])
+
+    def _get_shapes(self, size, nper)
+        if nper is not None:
+            price_size = np.broadcast_to(size[0], (nper,))
+            variance_size = np.broadcast_to(size[1], (nper,))
+        else:
+            price_size = np.ravel(size[0])
+            variance_size = np.ravel(size[1])
         return zip(price_size, variance_size)
 
-    def _make_first_quant(self):
-        # Set first price (i)
-        price = np.ravel(self.first_price)
+class Product(AbstractGridCore):
 
-        # Set first variance (il)
-        variance = np.atleast_2d(self.first_variance)
-        shape = (price.size, variance.shape[1])
-        variance = np.broadcast_to(variance, shape)
+    def _make_first_quant(self, price, variance, probability):
+        quant = qutil.GridQuantization2D(
+                price,
+                variance,
+                self._price_bounds,
+                self._variance_bounds,
+                self._weight
+                )
+        quant.set_probability(probability)
+        return quant
 
-        # Set first probabilities
-        probability = np.broadcast_to(self.first_probability, shape)
-        # ...and quietly normalize
-        probability = probability/np.sum(probability)
-
-        return Quantization(price, variance, probability)
-
-    def _one_step_optimize(self, shape, previous, *,
-                           verbose=True, fast=True):
-
-        def optimize_price_quantizer():
-            factory = _PriceFactory(self.model, shape[0], True,
-                                    prev_proba=previous.probability,
-                                    prev_variance=previous.variance,
-                                    prev_price=previous.price)
-            optimizer = pymaat.quantutil.Optimizer(factory)
-            if fast:
-                result = optimizer.quick_optimize(verbose=verbose)
-            else:
-                result = optimizer.optimize(verbose=verbose)
-            factory.clear()
-            return result
-
-        if verbose:
-            print("[Marginal Price Quantizer]")
-        price_quant = optimize_price_quantizer()
-
-        def optimize_variance_quantizer_conditional_on(idx):
-            # Compute root bounds
-            rb = price_quant._roots[:, :, idx:idx+2]
-            rb = np.moveaxis(rb, 2, 0)
-            factory = pymaat.garch.varquant._Factory(
-                self.model, shape[1], True,
-                prev_proba=previous.probability,
-                prev_value=previous.variance,
-                root_bounds=rb)
-            optimizer = pymaat.quantutil.Optimizer(factory)
-            if fast:
-                result = optimizer.quick_optimize(verbose=verbose)
-            else:
-                result = optimizer.optimize(verbose=verbose)
-            factory.clear()
-            return result
-
-        # TODO: parallelize
-        all_var_quant = [None]*shape[0]
-        for idx in range(shape[0]):
-            if verbose:
-                msg = "[idx={0}] Conditional Variance Quantizer".format(idx)
-                msg += " (price={0:.2f}%)".format(
-                    self.price_formatter(price_quant.value[idx]))
-                print(msg)
-            all_var_quant[idx] = \
-                optimize_variance_quantizer_conditional_on(idx)
-
+    def _one_step_optimize(self, t, shape, previous):
+        price_size = shape[0]
+        variance_size = shape[1]
+        # Extract arrays from previous quantization
+        prev_proba = np.ravel(previous.probability)
+        prev_quantizer = previous._ravel()
+        prev_price = prev_quantizer[:,0]  # Assumes first dim are prices...
+        prev_variance = prev_quantizer[:,1]  # and second dim are variances
+        # Perform marginal price quantization
+        price_quant = self._get_price_quantizer(
+                price_size, prev_proba, prev_price, prev_variance)
+        # Perform marginal variance quantizations
+        variance_quant = self._get_variance_quantizer(
+                variance_size, previous)
         # Merge results
-        price = price_quant.value
-        variance = np.empty(shape)
-        transition_probability = np.empty(previous.shape + shape)
-        for (idx, q) in enumerate(all_var_quant):
-            variance[idx, :] = q.value
-            transition_probability[:, :, idx, :] = q.transition_probability
-        probability = np.einsum(
-            'ij,ijkl',
-            previous.probability,
-            transition_probability)
-
-        return Quantization(price, variance, probability,
-                            transition_probability)
-
-
-class Quantization(pymaat.quantutil.AbstractQuantization):
-
-    dtype = np.dtype([('price', np.float_), ('variance', np.float_)])
-
-    def __init__(self, price, variance, probability,
-            transition_probability=None):
-        # Checks
-        self._check_positive_value(price)
-        self._check_positive_value(variance)
-        self._check_proba(probability)
-        if transition_probability is not None:
-            self._check_trans(transition_probability, (2,3))
-
-        self.price = price
-        self.variance = variance
-        self.probability = probability
-        self.transition_probability = transition_probability
-        self.shape = self.variance.shape
-        self.size = self.variance.size
-        self.ndim = self.variance.ndim
-
-        # Set value
-        value = np.empty(self.shape, self.dtype)
-        value['price'] = self.price[:, np.newaxis]
-        value['variance'] = self.variance
-        self._check_match_shape(probability,
-                value['price'], value['variance'])
-        self.value = value
-
-        # Voronoi tiles
-        self.voronoi_price = pymaat.quantutil.voronoi_1d(self.price)
-        self.voronoi_variance = np.empty((self.shape[0], self.shape[1]+1))
-        for idx in range(self.shape[0]):
-            self.voronoi_variance[idx, :] = pymaat.quantutil.voronoi_1d(
-                self.variance[idx, :])
-
-    def quantize(self, values):
-        out = np.empty_like(values)
-        price_idx = np.digitize(values['price'], self.voronoi_price)
-        out['price'] = self.price[price_idx-1]
-        # TODO: QUANTIZE VARIANCE
+        out = qutil.GridQuantization2D(
+             price_quant.value, variance_quant.value,
+             [0., np.inf], [0., np.inf], self._weight
+             )
+        out.set_previous(previous)
+        trans = np.empty((previous.size, price_size, variance_size))
+        for idx in range(price_size):
+            low_z = price_quant._roots[:,idx]
+            high_z = price_quant._roots[:,idx+1]
+            tmp_quant = pymaat.garch.varquant.Quantizer(
+                    np.ravel(variance_quant.value),
+                    prev_proba,
+                    self.model,
+                    prev_variance,
+                    low_z=low_z,
+                    high_z=high_z)
+            trans[:, idx, :] = tmp_quant.transition_probability
+        proba = np.einsum('i,ijk', prev_proba, trans)
+        # Unravel previous dimension
+        trans.shape = previous.shape + (price_size, variance_size)
+        # Set probabilities
+        out.set_probability(proba, strict=False)
+        out.set_transition_probability(trans)
         return out
 
+    def _get_price_quantizer(
+            self, shape, prev_proba, prev_price, prev_variance):
+        if self.verbose:
+            print("\nMarginal Price Quantizer")
+        # Do actual optimization
+        factory = pymaat.garch.pricequant.Factory(
+            self.model, prev_proba, prev_price, prev_variance)
+        optimizer = qutil.Optimizer1D(
+            factory,
+            shape,
+            verbose=self.verbose,
+            print_formatter=self._price_formatter
+            )
+        search_bounds = factory.get_search_bounds(10.)
+        return optimizer.optimize(search_bounds)
 
-class _PriceQuantizer(pymaat.quantutil.AbstractQuantizer1D):
+    def _get_variance_quantizer(self, shape, previous):
+        if self.verbose:
+            print("\nMarginal Variance Quantizer")
+        # Merge same variances
+        prev_proba = np.sum(previous.probability, axis=0)
+        prev_variance = previous.value2
+        # Do actual optimization...
+        factory = pymaat.garch.varquant.Factory(
+                self.model, prev_proba, prev_variance)
+        search_bounds = factory.get_search_bounds(10.)
+        optimizer = qutil.Optimizer1D(
+            factory,
+            shape,
+            verbose=self.verbose,
+            print_formatter=self._variance_formatter)
+        return optimizer.optimize(search_bounds)
 
-    @lazy_property
-    def _integral(self):
-        """
-        Returns of len-3 list indexed by order and filled with
-        prev_size-by-size arrays containing
-        ```
-            \\mathcal{I}_{order,t}^{(ij)}
-        ```
-        for all i,j.
-        Rem. Output only has valid entries, ie free of NaNs
-        """
-        def integrate(p):
-            return np.diff(
-                self.parent.model.retspec.price_integral_until(
-                    self.parent.prev_price,
-                    self.parent.prev_variance,
-                    self._roots,
-                    order=p),
-                axis=2)
-        return [integrate(p) for p in [0, 1, 2]]
+class Conditional(AbstractGridCore):
 
-    @lazy_property
-    def _delta(self):
-        """
-        Returns a prev_size-by-size+1 array containing
-        ```
-            \\delta_{t}^{(ij\\pm)}
-        ```
-        for all i,j.
-        Rem. Output only has valid entries (ie free of NaNs or inf)
-        In particular when voronoi==+np.inf, delta is zero
-        """
-        # Delta(0)
-        dX = self.parent.model.retspec.root_price_derivative(
-            self.broad_voronoi,
-            self.parent.prev_variance)
-        delta0 = np.zeros_like(dX)
-        delta0[..., 1:] = 0.5 * norm.pdf(self._roots[..., 1:]) * dX[..., 1:]
+    def __init__(self, *args, parallel=False, **kwargs):
+        self.parallel = parallel
+        super().__init__(*args, **kwargs)
 
-        # Delta(1)
-        delta1 = np.zeros_like(delta0)
-        delta1[..., :-1] = delta0[..., :-1] * self.broad_voronoi[..., :-1]
+    def _make_first_quant(self, price, variance, probability):
+        quant = qutil.ConditionalQuantization2D(
+                price,
+                variance,
+                self._price_bounds,
+                self._variance_bounds,
+                self._weight)
+        quant.set_probability(probability)
+        return quant
 
-        return (delta0, delta1)
+    def _one_step_optimize(self, t, shape, previous):
+        price_size = shape[0]
+        variance_size = shape[1]
 
-    @lazy_property
-    def _roots(self):
-        returns = np.log(self.broad_voronoi/self.parent.prev_price)
-        return self.parent.model.retspec.one_step_filter(
-            returns, self.parent.prev_variance)
+        # Extract arrays from previous quantization
+        prev_proba = np.ravel(previous.probability)
+        prev_quantizer = previous._ravel()
+        prev_price = prev_quantizer[:,0]  # Assumes first dim are prices...
+        prev_variance = prev_quantizer[:,1]  # and second dim are variances
 
+        # Perform marginal price quantization
+        price_quant = self._get_price_quantizer(
+                price_size, prev_proba, prev_price, prev_variance)
+        roots = price_quant._roots
 
-class _PriceFactory(pymaat.quantutil.AbstractFactory1D):
+        # Perform all conditional variance quantizations
+        #   [Embarassingly parallel]
+        f = partial(self._get_variance_quantizer_at,
+                variance_size,
+                prev_proba,
+                prev_variance,
+                roots)
 
-    target = _PriceQuantizer
+        if self.parallel:
+            p = Pool()
+            variance_quant = p.map(f, range(price_size))
+            p.close()
+        else:
+            variance_quant = []
+            for idx in range(price_size):
+                variance_quant.append(f(idx))
 
-    def __init__(self, model, size, unc_flag, *,
-                 prev_proba, prev_variance, prev_price):
-        return_scale = np.sqrt(np.amax(prev_variance))
-        min_value = np.amin(prev_price) * np.exp(-3.*return_scale)
-        max_value = np.amax(prev_price) * np.exp(3.*return_scale)
-        super().__init__(model, size, unc_flag,
-                         voronoi_bounds=[0, np.inf],
-                         prev_proba=prev_proba,
-                         bounds=(min_value,max_value))
-        self.prev_variance = prev_variance[:, :, np.newaxis]
-        self.prev_price = prev_price[:, np.newaxis, np.newaxis]
+        # Merge results
+        price = np.ravel(price_quant.value)
+        variance = np.empty((price_size, variance_size))
+        proba = np.empty((price_size, variance_size))
+        trans = np.empty((previous.size, price_size, variance_size))
+        for (idx, q) in enumerate(variance_quant):
+            variance[idx, :] = np.ravel(q.value)
+            proba[idx, :] = q.probability
+            trans[:, idx, :] = q.transition_probability
+        out = qutil.ConditionalQuantization2D(
+            price, variance, [0., np.inf], [0., np.inf], self._weight)
+        out.set_previous(previous)
+        out.set_probability(proba, strict=False)  # Allow null probability!
+        trans.shape = previous.shape + proba.shape
+        out.set_transition_probability(trans)
+
+        return out
+
+    def _get_price_quantizer(
+            self, shape, prev_proba, prev_price, prev_variance):
+        if self.verbose:
+            print("\nMarginal Price Quantizer")
+        # Do actual optimization
+        factory = pymaat.garch.pricequant.Factory(
+            self.model, prev_proba, prev_price, prev_variance)
+        optimizer = qutil.Optimizer1D(
+            factory,
+            shape,
+            verbose=self.verbose,
+            print_formatter=self._price_formatter
+            )
+        search_bounds = factory.get_search_bounds(10.)
+        return optimizer.optimize(search_bounds)
+
+    def _get_variance_quantizer_at(
+            self, shape, prev_proba, prev_variance, roots, idx):
+        if self.verbose:
+            print("\n[idx={0}] Conditional Variance Quantizer".format(idx))
+        factory = pymaat.garch.varquant.Factory(
+                self.model,
+                prev_proba,
+                prev_variance,
+                roots[:,idx],
+                roots[:,idx+1])
+        optimizer = qutil.Optimizer1D(
+            factory,
+            shape,
+            verbose=self.verbose,
+            print_formatter=self._variance_formatter)
+        search_bounds = factory.get_search_bounds(10.)
+        return optimizer.optimize(search_bounds)

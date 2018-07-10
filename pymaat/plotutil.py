@@ -2,13 +2,29 @@ import numpy as np
 import math
 from pymaat.mathutil import round_to_int
 
-def get_lim(values, lb=None, ub=None, base=5, margin=0.1):
-    lowest = round_to_int(np.amin(values)*(1.-margin),
-            base=base, fcn=math.floor)
-    highest = round_to_int(np.amax(values)*(1.+margin),
-            base=base, fcn=math.ceil)
-    if lb is not None:
-        lowest = max(lb, lowest)
-    if ub is not None:
-        highest = min(ub, highest)
-    return lowest, highest
+def get_lim(*args,
+        bounds=[-np.inf, np.inf],
+        base=None,
+        precision=None,
+        margin=0.,
+        formatter=lambda x:x):
+    args = [np.ravel(a) for a in args]
+    x = np.concatenate(args)
+    x = formatter(x)
+    ptp = np.ptp(x)
+    lim = [np.amin(x)-ptp*margin, np.amax(x)+ptp*margin]
+    if base is not None:
+        lim[0] = round_to_int(lim[0], base=base, fcn=math.floor)
+        lim[1] = round_to_int(lim[1], base=base, fcn=math.ceil)
+    elif precision is not None:
+        lim[0] = round_to_int(
+                lim[0]*10.**precision,
+                fcn=math.floor
+                )*10.**-precision
+        lim[1] = round_to_int(
+                lim[1]*10.**precision,
+                fcn=math.ceil
+                )*10.**-precision
+    lim[0] = max(bounds[0], lim[0])
+    lim[1] = min(bounds[1], lim[1])
+    return np.array(lim)

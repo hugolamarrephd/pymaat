@@ -1,5 +1,7 @@
 import os, sys, subprocess
+import numpy as np
 from setuptools import setup, find_packages
+from setuptools.extension import Extension
 from Cython.Build import cythonize
 import Cython.Compiler.Options
 Cython.Compiler.Options.annotate = True
@@ -8,7 +10,7 @@ def read(fname):
     return open(os.path.join(os.path.dirname(__file__), fname)).read()
 
 # All directories containing Cython code
-extensions_dir = ['pymaat/garch/spec/',]
+extensions_dir = ['pymaat/','pymaat/garch/spec/',]
 
 args = sys.argv[1:]
 
@@ -45,7 +47,9 @@ setup(
                 'matplotlib',
                 'cachetools'
             ],
-        ext_modules=cythonize([x + '*.pyx' for x in extensions_dir]),
+        ext_modules=cythonize(
+            [x + '*.pyx' for x in extensions_dir],
+            )
     )
 
 # Clean

@@ -8,6 +8,9 @@ from pymaat.util import PymaatException
 def icumsum(a):
     return np.cumsum(a[::-1])[::-1]
 
+def icumprod(a):
+    return np.cumprod(a[::-1])[::-1]
+
 #################
 # Special Views #
 #################

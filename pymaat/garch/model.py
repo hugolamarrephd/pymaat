@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 from scipy.stats import norm
+# from scipy.special import ndtr as normcdf
+from pymaat.mathutil_c import normcdf
 
 from pymaat.nputil import atleast_1d, elbyel
 from pymaat.util import method_decorator
@@ -39,7 +41,9 @@ class AbstractOneLagReturn(ABC):
 
     def price_integral_until(self, prices, variances, innovations, order=0):
         if order==0:
-            return norm.cdf(innovations)
+            out = np.empty_like(innovations)
+            normcdf(innovations, out)
+            return out
         elif order==1:
             volatilities = np.sqrt(variances)
             return self._first_order_integral(
@@ -79,6 +83,14 @@ class AbstractOneLagGarch(ABC):
 
     @abstractmethod
     def _equation(self, innovations, variances, volatilities):
+        pass
+
+    @abstractmethod
+    def _get_lowest_one_step_variance(self, variances, lb, ub):
+        pass
+
+    @abstractmethod
+    def _get_highest_one_step_variance(self, variances, lb, ub):
         pass
 
     @abstractmethod
@@ -146,23 +158,13 @@ class AbstractOneLagGarch(ABC):
     # One step #
     ############
 
-    # TODO: send this to spec
     @method_decorator(elbyel)
-    def get_lowest_one_step_variance(
-            self, variances, lb=-np.inf, ub=np.inf):
-        adj_lb = lb - self.gamma*np.sqrt(variances)
-        adj_ub = ub - self.gamma*np.sqrt(variances)
-        out = np.minimum(adj_lb**2., adj_ub**2.)
-        out[np.logical_and(adj_lb<0., adj_ub>0.)] = 0.
-        return self.omega + self.beta*variances + self.alpha*out
+    def get_lowest_one_step_variance(self, variances, lb=-np.inf, ub=np.inf):
+        return self._get_lowest_one_step_variance(variances, lb, ub)
 
     @method_decorator(elbyel)
-    def get_highest_one_step_variance(
-            self, variances, lb=-np.inf, ub=np.inf):
-        adj_lb = lb - self.gamma*np.sqrt(variances)
-        adj_ub = ub - self.gamma*np.sqrt(variances)
-        out = np.maximum(adj_lb**2., adj_ub**2.)
-        return self.omega + self.beta*variances + self.alpha*out
+    def get_highest_one_step_variance(self, variances, lb=-np.inf, ub=np.inf):
+        return self._get_highest_one_step_variance(variances, lb, ub)
 
     @method_decorator(elbyel)
     def one_step_filter(self, returns, variances):
@@ -180,7 +182,7 @@ class AbstractOneLagGarch(ABC):
                 innovations, variances, volatilities)
         next_variances = self._equation(innovations,
                 variances, volatilities)
-        return (next_variances,returns)
+        return (next_variances, returns)
 
     @method_decorator(elbyel)
     def real_roots(self, variances, next_variances):
@@ -243,7 +245,7 @@ class AbstractOneLagGarch(ABC):
         # Treat limit cases
         limit_cases = np.broadcast_to(limit_cases, pdf_factor.shape)
         # Set PDF factor to zero to avoid `inf*zero` indetermination
-        pdf_factor[limit_cases] = 0
+        pdf_factor[limit_cases] = 0.
         # Compute pdf_factor*pdf + cdf_factor*cdf
         out = pdf_factor
         out *= _pdf

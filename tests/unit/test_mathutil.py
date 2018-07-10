@@ -6,6 +6,9 @@ from scipy.stats import norm
 import pymaat.testing as pt
 
 import pymaat.mathutil as mu
+import pymaat.mathutil_c as muc
+
+import time
 
 @pytest.fixture(params=[(1,), (10,9), (2,4,7), (100,100)])
 def shape(request):
@@ -60,55 +63,41 @@ def test_ilogistic_outside_space():
     assert np.isnan(mu.ilogistic(np.array([1.5])))
     assert np.isnan(mu.ilogistic(np.array([-1.5])))
 
-# Error function (and normal cdf)
 
-def test_fast_erfc(random_normal):
+# C-level Normal PDF/CDF (Scalar only)
+
+def test_normcdf(random_normal):
     x = random_normal
-    value = mu.fast_erfc(x)
-    assert value.shape == x.shape
-    expected = np.empty_like(value)
-    it = np.nditer(x, flags=['multi_index'])
-    while not it.finished:
-        expected[it.multi_index] = math.erfc(x[it.multi_index])
-        it.iternext()
-    pt.assert_almost_equal(value, expected, atol=1e-6)
-
-def test_fast_erfc_at_pm_inf():
-    assert mu.fast_erfc(np.array([np.inf])) == 0.
-    assert mu.fast_erfc(np.array([-np.inf])) == 2.
-
-def test_fast_erf(random_normal):
-    x = random_normal
-    value = mu.fast_erf(x)
-    assert value.shape == x.shape
-    expected = np.empty_like(value)
-    it = np.nditer(x, flags=['multi_index'])
-    while not it.finished:
-        expected[it.multi_index] = math.erf(x[it.multi_index])
-        it.iternext()
-    pt.assert_almost_equal(value, expected, atol=1e-6)
-
-def test_fast_erf_at_pm_inf():
-    assert mu.fast_erf(np.array([np.inf])) == 1.
-    assert mu.fast_erf(np.array([-np.inf])) == -1.
-
-def test_fast_normcdf(random_normal):
-    x = random_normal
-    value = mu.fast_normcdf(x)
+    value = np.empty_like(x)
+    s = time.time()
+    muc.normcdf(x, value)
+    e = time.time()
+    print("My cdf: {}".format(e-s))
+    s = time.time()
     expected = norm.cdf(x)
-    pt.assert_almost_equal(value, expected, atol=1e-6)
+    e = time.time()
+    print("Scipy cdf: {}".format(e-s))
+    pt.assert_almost_equal(
+            value, expected, rtol=1e-6, atol=0)
 
-def test_fast_normcdf_at_pm_inf():
-    assert mu.fast_normcdf(np.array([np.inf])) == 1.
-    assert mu.fast_normcdf(np.array([-np.inf])) == 0.
+def test_normcdf_at_pm_inf():
+    v = np.empty((1,))
+    muc.normcdf(np.array(np.inf),v)
+    assert v == 1.
+    muc.normcdf(np.array(-np.inf),v)
+    assert v == 0.
 
 def test_normpdf(random_normal):
     x = random_normal
-    value = mu.normpdf(x)
+    value = np.empty_like(x)
+    muc.normpdf(x, value)
     expected = norm.pdf(x)
-    pt.assert_almost_equal(value, expected)
+    pt.assert_almost_equal(value, expected,
+            rtol=1e-6, atol=0)
 
-def test_fast_normpdf_at_pm_inf():
-    assert mu.normpdf(np.array([np.inf])) == 0.
-    assert mu.normpdf(np.array([-np.inf])) == 0.
-
+def test_normpdf_at_pm_inf():
+    v = np.empty((1,))
+    muc.normpdf(np.array(np.inf), v)
+    assert v == 0.
+    muc.normpdf(np.array(-np.inf), v)
+    assert v == 0.

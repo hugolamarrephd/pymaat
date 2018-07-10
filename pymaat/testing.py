@@ -199,8 +199,6 @@ def _validate_shape(mode, *args, msg=''):
         raise ValueError(
             "Unexpected 'shape' mode: must be either 'strict' or 'broad'"
         )
-    if args[0].size == 0:
-        warnings.warn("Comparing 0-size arrays", UserWarning)
     return (msg,) + tuple(args)
 
 
