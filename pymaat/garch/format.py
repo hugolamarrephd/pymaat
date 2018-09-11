@@ -1,8 +1,11 @@
 import numpy as np
 
 # Price
-def base_price(x):
+def price_formatter(x):
     return 100.*x
+
+def log_price_formatter(x):
+    return 100.*np.exp(x)
 
 # Variance
 def yearly_var(x):

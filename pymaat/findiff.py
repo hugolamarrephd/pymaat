@@ -3,7 +3,7 @@ from functools import partial
 import numpy as np
 import scipy.misc
 
-from pymaat.nputil import atleast_1d, elbyel
+from pymaat.nputil import atleast_1d
 
 SPACE = np.power(np.finfo(float).eps, 1/3)
 '''

@@ -1,309 +1,435 @@
 import os
-import numpy as np
 from multiprocessing import Pool
-from functools import partial
+from functools import partial, wraps
+import warnings
 
+import numpy as np
+from zignor import randn
+
+from pymaat.garch.spec.hngarch import HestonNandiGarch
 import pymaat.quantutil as qutil
-import pymaat.garch.varquant
-import pymaat.garch.pricequant
-from pymaat.garch.format import variance_formatter, base_price
-
 import pymaat.testing as pt
-from pymaat.nputil import printoptions
-import time
+from pymaat.nputil import printoptions, ravel
+from pymaat.util import method_decorator
+from pymaat.garch.format import variance_formatter, log_price_formatter
 
-def plot(model, quantization, ax, cax=None, freq='daily', lim=None,
-        plim=None, show_quantizer=True):
-    from matplotlib.patches import Polygon
-    f = [base_price, variance_formatter(freq)]
-    quantization.plot2d(ax, cax, formatters=f, lim=lim, plim=plim,
-            show_quantizer=show_quantizer)
+class GarchCoreMixin:
 
-class AbstractCore(qutil.AbstractCore):
+    _logprice_bounds = np.array([-np.inf, np.inf])
+    _variance_bounds = np.array([0., np.inf])
+    _bounds = np.array([[-np.inf, 0.], [np.inf, np.inf]])
 
-    def __init__(self,
-                model,
-                size,
-                nper=None,
-                freq='daily',
+    def __init__(self, *,
+                model=None,
                 first_variance=None,
-                first_price=1.,
+                first_logprice=0.,
                 first_probability=1.,
-                verbose=False
+                freq='daily',
+                **kwargs
                 ):
-        self.model = model
-        shapes = self._get_shapes(size, nper)
+        if model is None:
+            model = HestonNandiGarch(
+                        mu=2.04,
+                        omega=3.28e-7,
+                        alpha=4.5e-6,
+                        beta=0.8,
+                        gamma=190
+                        )
         if first_variance is None:
             first_variance = self._get_default_first_variance(freq)
-        first_quant = self._make_first_quant(
-            first_price, first_variance, first_probability)
-        super().__init__(shapes, first_quant, verbose)
+        # Set properties
+        self.model = model
+        self.first_logprice = first_logprice
+        self.first_variance = first_variance
+        self.first_probability = first_probability
+        # Some internals (for plotting)
         self._variance_formatter = variance_formatter(freq)
-        self._price_formatter = base_price
-        # TODO used frequency to set weight
-        self._weight = np.array([1e1, 1e4])
+        self._logprice_formatter = log_price_formatter
+        super().__init__(**kwargs)
 
     def _get_default_first_variance(self, freq):
-            if freq.lower() == 'daily':
-                return (0.18**2.)/252.
-            elif freq.lower() == 'weekly':
-                return (0.18**2.)/52.
-            elif freq.lower() == 'monthly':
-                return (0.18**2.)/12.
-            elif freq.lower() == 'yearly':
-                return 0.18**2.
-            else:
-                raise ValueError("Unexpected frequency")
-
-    def _get_shapes(self, size, nper):
-        raise NotImplementedError
-
-    def _make_first_quant(self, price, variance, probability):
-        raise NotImplementedError
-
-class AbstractVoronoiCore(AbstractCore):
-
-    _bounds = np.array([[0.,0.],[np.inf,np.inf]])
-
-    def __init__(self, *args, nsim=1000000, **kwargs):
-        self.nsim = nsim
-        super().__init__(*args, **kwargs)
-
-    def _get_shapes(self, size, nper):
-        if nper is not None:
-            return np.broadcast_to(size, (nper,))
+        if freq.lower() == 'daily':
+            return (0.18**2.)/252.
+        elif freq.lower() == 'weekly':
+            return (0.18**2.)/52.
+        elif freq.lower() == 'monthly':
+            return (0.18**2.)/12.
+        elif freq.lower() == 'yearly':
+            return (0.18**2.)/1.
         else:
-            return np.ravel(size)
+            raise ValueError("Unexpected frequency")
 
-    def _make_first_quant(self, price, variance, probability):
-        quant = qutil.VoronoiQuantization(
-                np.column_stack((price, variance)),
-                self._bounds,
-                self._weight
-                )
-        quant.set_probability(probability)
-        self._first_idx = np.random.choice(
-                quant.size,
-                self.nsim,
-                p=quant.probability
-                )
-        return quant
+    def get_weights(self):
+        h0 = np.dot(self.first_variance, self.first_probability)
+        _, varlp = self.model.termstruct_logprice(h0, self.nper)
+        _, varh = self.model.termstruct_variance(h0, self.nper)
+        weights = np.column_stack((varlp, varh[1:]))
+        weights = np.sqrt(weights)
+        weights **= -1.
+        return weights
 
-    def _initialize_hook(self):
-        self._previous_idx = self._first_idx
+    def plot_at(self, t, ax, colorbar_ax=None, **kwargs):
+        self.quantizations[t].plot2d(
+                ax, colorbar_ax, **kwargs,
+                formatter1 = self._logprice_formatter,
+                formatter2 = self._variance_formatter)
 
-    def _one_step_optimize(self, t, shape, previous):
-        simul = self._get_simulation(t, previous, self._previous_idx)
-        if simul.shape[0] <= shape:
-            raise ValueError("Number of simulations must be greater"
-                    "than desired quantizer size")
+
+    @method_decorator(ravel)
+    def european_option(self, normstrike, *, T=None, put=False):
+        if T is None:
+            T = self.nper
+        if not np.isscalar(T):
+            raise ValueError('Time-to-expiry must be scalar')
+        if T > self.nper:
+            raise ValueError('Time-to-expiry longer than quantization')
+
+        if put:
+            payoff = lambda logp, k: np.maximum(k-np.exp(logp), 0)
         else:
-            starting_at = simul[-shape:,:]
-            assert starting_at.shape[0] == shape
-        quant = qutil.VoronoiQuantization.stochastic_optimization(
-                    starting_at,
-                    simul,
-                    nclvq=shape,
-                    nlloyd=10,
-                    weight=self._weight,
-                    bounds=self._bounds
+            payoff = lambda logp, k: np.maximum(np.exp(logp)-k, 0)
+        all_quantizations = self.quantizations[:T]
+
+        def get_price(k):
+            quant = all_quantizations[-1]  # Use last only!
+            return np.sum(
+                    quant.probability
+                    * payoff(quant.quantizer[...,0], k)
                     )
-        idx = quant._digitize(simul)
-        # Make sure all states are observed at least once
-        unobserved = np.logical_not(
-                np.isin(np.arange(quant.size), idx)
-                )
-        if np.any(unobserved):
-            raise UnobservedState
-        # Set quantization properties (probabilities, distortion, etc.)
-        quant.set_previous(previous)
-        quant._estimate_and_set_all_probabilities(idx, previous_idx)
-        quant._estimate_and_set_distortion(simul, idx)
-        self._previous_idx = idx
-        return quant
 
-    def _get_simulation(self, t, previous, previous_idx):
-        raise NotImplementedError
+        result = np.empty_like(normstrike)
+        for (n,k) in enumerate(normstrike):
+            result[n] = get_price(k)
 
-class Marginal(AbstractVoronoiCore):
+        return result
 
-    def _initialize_hook(self):
-        super()._initialize_hook()
-        first = self._first_quantization.quantizer[self._first_idx,:]
-        self._simul = self._do_all_simulation(first, len(self._shapes))
+    @method_decorator(ravel)
+    def american_option(self, normstrike, rate, *, T=None, put=False):
+        if T is None:
+            T = self.nper
+        if not np.isscalar(T):
+            raise ValueError('Time-to-expiry must be scalar')
+        if T > self.nper:
+            raise ValueError('Time-to-expiry longer than quantization')
 
-    def _get_simulation(self, t, previous, previous_idx):
-        return self._simul[t]
+        discount_factor = np.exp(-rate)
 
-    @staticmethod
-    def _do_all_simulation(first, until):
-        p0 = first[:,0]
-        h0 = first[:,1]
-        nsim = first.shape[0]
-        innovations = np.random.normal(size=(until, nsim))
-        variances, returns = model.timeseries_generate(
-                innovations, h0[np.newaxis,:])
-        returns = np.vstack((np.zeros((1,nsim)),returns))
-        prices = p0[np.newaxis,:]*np.exp(np.cumsum(returns, axis=0))
-        # Format...
-        values = []
-        for (p,v) in zip(prices, variances):
-            values.append(np.column_stack((p,v)))
-        assert len(values)==until+1
-        assert np.all(values[0][:,0]==p0)
-        assert np.all(prices[0][:,1]==h0)
-        return values
-
-class Markov(AbstractVoronoiCore):
-
-    def _get_simulation(self, t, previous, previous_idx):
-        return self._do_one_step_simulation(previous, previous_idx)
-
-    @staticmethod
-    def do_one_step_simulation(quant, idx):
-        assert quant.probability is not None
-        nsim = idx.size
-        p0 = quant.quantizer[idx,0]
-        h0 = quant.quantizer[idx,1]
-        innovations = np.random.normal(size=nsim)
-        variances, returns = model.one_step_generate(
-                innovations, h0[np.newaxis,:])
-        prices = p0[np.newaxis,:] * np.exp(returns)
-        return np.column_stack((prices,variances))
-
-class AbstractGridCore(AbstractCore):
-
-    _price_bounds = _variance_bounds = np.array([0., np.inf])
-
-    def _get_shapes(self, size, nper)
-        if nper is not None:
-            price_size = np.broadcast_to(size[0], (nper,))
-            variance_size = np.broadcast_to(size[1], (nper,))
+        if put:
+            payoff = lambda logp, k: np.maximum(k-np.exp(logp), 0)
         else:
-            price_size = np.ravel(size[0])
-            variance_size = np.ravel(size[1])
-        return zip(price_size, variance_size)
+            payoff = lambda logp, k: np.maximum(np.exp(logp)-k, 0)
+        all_quantizations = self.quantizations[:T]
 
-class Product(AbstractGridCore):
 
-    def _make_first_quant(self, price, variance, probability):
-        quant = qutil.GridQuantization2D(
-                price,
-                variance,
-                self._price_bounds,
-                self._variance_bounds,
-                self._weight
+        def get_price(k):
+            # Initialization
+            quant = all_quantizations[-1]
+            spotlogprice = quant.quantizer[...,0] + T*rate
+            value = payoff(spotlogprice, k)
+            # Backward recursion
+            for (tau, quant) in enumerate(reversed(all_quantizations)):
+                if quant.transition_probability is None:
+                    raise ValueError(
+                            'Transition probabilities must be set '
+                            'prior to computing option prices'
+                    )
+                continuation = np.tensordot(
+                        quant.transition_probability,
+                        value,
+                        axes=(
+                            tuple(range(-value.ndim, 0)), # Last ndim dimensions
+                            tuple(range(0, value.ndim))  # First ndim (all) dimensions
+                            )
+                        )
+                continuation *= discount_factor
+                logprice = quant.previous.quantizer[...,0]
+                spotlogprice = logprice + (T-1-tau)*rate
+                exercise = payoff(spotlogprice, k)
+                value = np.maximum(continuation, exercise)
+            return value
+
+        result = np.empty_like(normstrike)
+        for (n,k) in enumerate(normstrike):
+            result[n] = get_price(k)
+
+        return result
+
+    def optimal_hedging_surface(self, strike, T=21, put=False):
+        assert np.isscalar(strike)
+        if put:
+            payoff = lambda lp: np.maximum(strike-np.exp(lp), 0)
+        else:
+            payoff = lambda lp: np.maximum(np.exp(lp)-strike, 0)
+        all_quantizations = self.quantizations[:T]
+        # Initialization
+        quant = all_quantizations[-1]
+        logprice = quant.quantizer[...,0]
+        c = payoff(logprice)
+        gamma = np.ones_like(c)
+        # Backward recursion
+        surface = []
+        for quant in reversed(all_quantizations):
+            if quant.transition_probability is None:
+                raise ValueError(
+                        'Transition probabilities must be set '
+                        'prior to computing option prices'
                 )
-        quant.set_probability(probability)
+            current = quant.quantizer[...,0]
+            previous = quant.previous.quantizer[...,0]
+            price_changes = np.exp(
+                    np.reshape(current, (1,)*previous.ndim + current.shape)
+                    - np.reshape(previous, previous.shape + (1,)*current.ndim)
+                    ) - 1.
+            current_dims = tuple(range(-current.ndim, 0))
+            previous_dims = tuple(range(0, previous.ndim))
+            tensor_axes = (current_dims, previous_dims)
+            m0 = np.tensordot(
+                    quant.transition_probability,
+                    gamma,
+                    axes=tensor_axes
+                    )
+            m1 = np.tensordot(
+                    quant.transition_probability*price_changes,
+                    gamma,
+                    axes=tensor_axes
+                    )
+            m2 = np.tensordot(
+                    quant.transition_probability*price_changes**2.,
+                    gamma,
+                    axes=tensor_axes
+                    )
+            q0 = np.tensordot(
+                    quant.transition_probability,
+                    c * gamma,
+                    axes=tensor_axes
+                    )
+            q1 = np.tensordot(
+                    quant.transition_probability*price_changes,
+                    c * gamma,
+                    axes=tensor_axes
+                    )
+            # Preparing next step...
+            gamma = m0 - m1**2./m2  # Must be updated first!
+            c = (q0 - m1*q1/m2)/gamma
+            # Registering result in surface
+            surface.append(
+                {'quant':quant.previous, 'm1':m1, 'm2':m2, 'q1':q1})
+        def get_hedge(prices, strikes, variances, portfolio, tau=T, put=None):
+            assert np.all(strikes==strike)
+            # `surface` is in closure
+            if not (portfolio.size == prices.size == variances.size):
+                raise ValueError("Size mismatch")
+            # Extract surface and associated quantization
+            s = surface[tau-1]
+            quant = s['quant']
+            # Quantize
+            logprices = np.log(prices)
+            values = np.column_stack((logprices,variances))
+            idx = quant._digitize(values)
+            m1 = s['m1'][idx]
+            m2 = s['m2'][idx]
+            q1 = s['q1'][idx]
+            price = np.exp(quant.quantizer[...,0])[idx]
+            # Compute deltas
+            return (q1-portfolio*m1)/(m2*price)
+        return c, get_hedge
+
+
+    def simulate(self, nsim):
+        first = self.first_quantization.simulate(nsim)
+        first_logprice = first[:,0]
+        first_variance = first[:,1]
+        innovations = randn(int(self.nper), int(nsim))  # Fast normal
+        variances, logprices = self.model.timeseries_generate(
+                innovations, first_variance, first_logprice)
+        # Formatting
+        simul = []
+        for (lp,v) in zip(logprices, variances):
+            simul.append(np.column_stack((lp,v)))
+        return simul[0], simul[1:]
+
+    def one_step_simulate(self, previous, nsim):
+        prev = previous.simulate(nsim)
+        prev_logprice = prev[:,0]
+        prev_variance = prev[:,1]
+        innovations = randn(int(nsim))
+        variances, returns = self.model.one_step_generate(
+                innovations, prev_variance)
+        logprices = prev_logprice + returns
+        # Formatting
+        prev_simul = np.column_stack((prev_logprice,prev_variance))
+        simul = np.column_stack((logprices,variances))
+        return prev_simul, simul
+
+class GarchVoronoiCoreMixin(GarchCoreMixin):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def get_first_quantization(self):
+        quantizer = np.column_stack(
+                (self.first_logprice, self.first_variance))
+        weight = np.ones((2,))
+        quant = qutil.VoronoiQuantization(quantizer, self._bounds, weight)
+        quant.set_probability(self.first_probability)
         return quant
 
-    def _one_step_optimize(self, t, shape, previous):
-        price_size = shape[0]
-        variance_size = shape[1]
-        # Extract arrays from previous quantization
-        prev_proba = np.ravel(previous.probability)
-        prev_quantizer = previous._ravel()
-        prev_price = prev_quantizer[:,0]  # Assumes first dim are prices...
-        prev_variance = prev_quantizer[:,1]  # and second dim are variances
-        # Perform marginal price quantization
-        price_quant = self._get_price_quantizer(
-                price_size, prev_proba, prev_price, prev_variance)
-        # Perform marginal variance quantizations
-        variance_quant = self._get_variance_quantizer(
-                variance_size, previous)
-        # Merge results
-        out = qutil.GridQuantization2D(
-             price_quant.value, variance_quant.value,
-             [0., np.inf], [0., np.inf], self._weight
-             )
-        out.set_previous(previous)
-        trans = np.empty((previous.size, price_size, variance_size))
-        for idx in range(price_size):
-            low_z = price_quant._roots[:,idx]
-            high_z = price_quant._roots[:,idx+1]
-            tmp_quant = pymaat.garch.varquant.Quantizer(
-                    np.ravel(variance_quant.value),
-                    prev_proba,
-                    self.model,
-                    prev_variance,
-                    low_z=low_z,
-                    high_z=high_z)
-            trans[:, idx, :] = tmp_quant.transition_probability
-        proba = np.einsum('i,ijk', prev_proba, trans)
-        # Unravel previous dimension
-        trans.shape = previous.shape + (price_size, variance_size)
-        # Set probabilities
-        out.set_probability(proba, strict=False)
-        out.set_transition_probability(trans)
-        return out
+class Marginal(
+        GarchVoronoiCoreMixin,
+        qutil.AbstractMarginalVoronoiCore,
+        ):
 
-    def _get_price_quantizer(
-            self, shape, prev_proba, prev_price, prev_variance):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+class Markov(
+        GarchVoronoiCoreMixin,
+        qutil.AbstractMarkovianVoronoiCore,
+        ):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+class GarchGridCoreMixin(GarchCoreMixin):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def _optimize_logprice_quantizer(
+            self, weight, shape, prev_proba, prev_logprice, prev_variance):
         if self.verbose:
-            print("\nMarginal Price Quantizer")
+            print("\n Optimizing Price Quantizer...")
         # Do actual optimization
-        factory = pymaat.garch.pricequant.Factory(
-            self.model, prev_proba, prev_price, prev_variance)
+        factory = self.model.retspec.get_quant_factory(
+            prev_proba, prev_logprice, prev_variance)
         optimizer = qutil.Optimizer1D(
             factory,
             shape,
             verbose=self.verbose,
-            print_formatter=self._price_formatter
+            weight=weight[0],
+            formatter=self._logprice_formatter
             )
         search_bounds = factory.get_search_bounds(10.)
         return optimizer.optimize(search_bounds)
 
-    def _get_variance_quantizer(self, shape, previous):
+class Product(
+        GarchGridCoreMixin,
+        qutil.AbstractMarkovianCore
+        ):
+
+    def get_first_quantization(self):
+        quant = qutil.GridQuantization2D(
+                self.first_logprice,
+                self.first_variance,
+                self._logprice_bounds,
+                self._variance_bounds,
+                )
+        quant.set_probability(self.first_probability)
+        return quant
+
+    def one_step_optimize(self, shape, previous, weight):
+        price_size = shape[0]
+        variance_size = shape[1]
+        # Extract arrays from previous quantization
+        prev_proba = np.ravel(previous.probability)
+        prev_quantizer = previous._ravel()
+        prev_logprice = prev_quantizer[:,0]  # Assumes first dim are prices...
+        prev_variance = prev_quantizer[:,1]  # and second dim are variances
+        # Perform marginal price quantization
+        logprice_quant = self._optimize_logprice_quantizer(
+                weight, price_size, prev_proba, prev_logprice, prev_variance)
+        roots = logprice_quant.get_roots()[0]
+        # Perform marginal variance quantizations
+        variance_quant = self._optimize_variance_quantizer(
+                weight, variance_size, previous)
+        # Merge results
+        out = qutil.GridQuantization2D(
+             logprice_quant.value,
+             variance_quant.value,
+             self._logprice_bounds,
+             self._variance_bounds,
+             weight
+             )
+        # TODO: use sparse matrix here
+        trans = np.empty((previous.size, price_size, variance_size))
+        for idx in range(price_size):
+            f = self.model.get_quant_factory(
+                    prev_proba,
+                    prev_variance,
+                    roots[:,idx],
+                    roots[:,idx+1]
+                    )
+            tmp = f.make(variance_quant.value)
+            trans[:, idx, :] = tmp.transition_probability
+        proba = np.einsum('i,ijk', prev_proba, trans)
+        # Unravel previous dimension
+        trans.shape = previous.shape + (price_size, variance_size)
+        # Set quantization
+        out.set_previous(previous)
+        out.set_probability(proba, strict=False)
+        out.set_transition_probability(trans)
+        return out
+
+    def _optimize_variance_quantizer(self, weight, shape, previous):
         if self.verbose:
-            print("\nMarginal Variance Quantizer")
+            print("\aVariance Quantizer")
         # Merge same variances
         prev_proba = np.sum(previous.probability, axis=0)
         prev_variance = previous.value2
         # Do actual optimization...
-        factory = pymaat.garch.varquant.Factory(
-                self.model, prev_proba, prev_variance)
+        factory = self.model.get_quant_factory(prev_proba, prev_variance)
         search_bounds = factory.get_search_bounds(10.)
         optimizer = qutil.Optimizer1D(
             factory,
             shape,
+            weight=weight[1],
             verbose=self.verbose,
-            print_formatter=self._variance_formatter)
+            formatter=self._variance_formatter
+            )
         return optimizer.optimize(search_bounds)
 
-class Conditional(AbstractGridCore):
+class Conditional(
+        GarchGridCoreMixin,
+        qutil.AbstractMarkovianCore
+        ):
 
-    def __init__(self, *args, parallel=False, **kwargs):
-        self.parallel = parallel
-        super().__init__(*args, **kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-    def _make_first_quant(self, price, variance, probability):
+    def get_first_quantization(self):
         quant = qutil.ConditionalQuantization2D(
-                price,
-                variance,
-                self._price_bounds,
+                self.first_logprice,
+                self.first_variance,
+                self._logprice_bounds,
                 self._variance_bounds,
-                self._weight)
-        quant.set_probability(probability)
+                )
+        quant.set_probability(self.first_probability)
         return quant
 
-    def _one_step_optimize(self, t, shape, previous):
+    def one_step_optimize(self, shape, previous, weight):
         price_size = shape[0]
         variance_size = shape[1]
+
+        if previous.size == 1:
+            # Catch degenerated case
+            price_size = price_size * variance_size
+            variance_size = 1
 
         # Extract arrays from previous quantization
         prev_proba = np.ravel(previous.probability)
         prev_quantizer = previous._ravel()
-        prev_price = prev_quantizer[:,0]  # Assumes first dim are prices...
+        prev_logprice = prev_quantizer[:,0]  # Assumes first dim are prices...
         prev_variance = prev_quantizer[:,1]  # and second dim are variances
 
         # Perform marginal price quantization
-        price_quant = self._get_price_quantizer(
-                price_size, prev_proba, prev_price, prev_variance)
-        roots = price_quant._roots
+        logprice_quant = self._optimize_logprice_quantizer(
+                weight, price_size, prev_proba, prev_logprice, prev_variance)
+        roots = logprice_quant.get_roots()[0]
 
         # Perform all conditional variance quantizations
         #   [Embarassingly parallel]
-        f = partial(self._get_variance_quantizer_at,
+        f = partial(self._optimize_variance_quantizer_at,
+                weight,
                 variance_size,
                 prev_proba,
                 prev_variance,
@@ -319,45 +445,35 @@ class Conditional(AbstractGridCore):
                 variance_quant.append(f(idx))
 
         # Merge results
-        price = np.ravel(price_quant.value)
+        price = np.ravel(logprice_quant.value)
         variance = np.empty((price_size, variance_size))
         proba = np.empty((price_size, variance_size))
+        #TODO: use sparse matrix here
         trans = np.empty((previous.size, price_size, variance_size))
-        for (idx, q) in enumerate(variance_quant):
-            variance[idx, :] = np.ravel(q.value)
-            proba[idx, :] = q.probability
-            trans[:, idx, :] = q.transition_probability
-        out = qutil.ConditionalQuantization2D(
-            price, variance, [0., np.inf], [0., np.inf], self._weight)
-        out.set_previous(previous)
-        out.set_probability(proba, strict=False)  # Allow null probability!
+        for (idx, tmp) in enumerate(variance_quant):
+            variance[idx, :] = np.ravel(tmp.value)
+            proba[idx, :] = tmp.probability
+            trans[:, idx, :] = tmp.transition_probability
         trans.shape = previous.shape + proba.shape
-        out.set_transition_probability(trans)
 
+        # Build Quantization
+        out = qutil.ConditionalQuantization2D(
+            price,
+            variance,
+            self._logprice_bounds,
+            self._variance_bounds,
+            weight
+            )
+        out.set_previous(previous)
+        out.set_probability(proba, strict=False)
+        out.set_transition_probability(trans)
         return out
 
-    def _get_price_quantizer(
-            self, shape, prev_proba, prev_price, prev_variance):
-        if self.verbose:
-            print("\nMarginal Price Quantizer")
-        # Do actual optimization
-        factory = pymaat.garch.pricequant.Factory(
-            self.model, prev_proba, prev_price, prev_variance)
-        optimizer = qutil.Optimizer1D(
-            factory,
-            shape,
-            verbose=self.verbose,
-            print_formatter=self._price_formatter
-            )
-        search_bounds = factory.get_search_bounds(10.)
-        return optimizer.optimize(search_bounds)
-
-    def _get_variance_quantizer_at(
-            self, shape, prev_proba, prev_variance, roots, idx):
+    def _optimize_variance_quantizer_at(
+            self, weight, shape, prev_proba, prev_variance, roots, idx):
         if self.verbose:
             print("\n[idx={0}] Conditional Variance Quantizer".format(idx))
-        factory = pymaat.garch.varquant.Factory(
-                self.model,
+        factory = self.model.get_quant_factory(
                 prev_proba,
                 prev_variance,
                 roots[:,idx],
@@ -365,7 +481,9 @@ class Conditional(AbstractGridCore):
         optimizer = qutil.Optimizer1D(
             factory,
             shape,
+            weight=weight[1],
             verbose=self.verbose,
-            print_formatter=self._variance_formatter)
+            formatter=self._variance_formatter
+            )
         search_bounds = factory.get_search_bounds(10.)
         return optimizer.optimize(search_bounds)

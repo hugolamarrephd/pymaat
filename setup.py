@@ -42,6 +42,7 @@ setup(
         python_requires='>=3.7',
         install_requires=[
                 'numpy',
+                'zignor',
                 'scipy',
                 'tabulate',
                 'matplotlib',

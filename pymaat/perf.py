@@ -1,4 +1,5 @@
 import time
+from contextlib import contextmanager
 
 def timethis(number=1):
     def decorator(func):

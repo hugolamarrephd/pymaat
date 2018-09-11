@@ -94,106 +94,48 @@ def _diag_size(shape, k):
 # Decorators #
 ##############
 
-def elbyel(function):
+def ravel(function):
     '''
-    Element-by-element function decorator.
-
-    Decorated functions may rely on assignments and indexing.
-    '''
-    old_function = function
-    function = atleast_1d(function)
-    function = handle_scalar_input(function)
-    return wraps(old_function)(function)
-
-def forced_elbyel(function):
-    '''
-    Element-by-element function decorator.
-
-    Decorated function may safely assume all its arguments are of the same
-    shape. Decorated functions may thus rely on assignments and indexing.
-    '''
-    old_function = function
-    function = broadcast(function)
-    function = handle_scalar_input(function)
-    return wraps(old_function)(function)
-
-def atleast_1d(function):
-    '''
-    Casts scalar positional arguments to ndarray **with at least 1D**,
+    Decorated functions may safely assume all positional arguments are
+        one-dimensional numpy arrays,
         but leaves keyword arguments **untouched**.
-
-    Decorated functions may safely assume all positional arguments are numpy
-        arrays with at least one dimension.
-        In particular, function body may rely on assignments, indexing
-        and broadcasting --- even if scalar inputs are provided by user.
     '''
     def wrapper(*args, **kargs):
         old_args = args
         args = []
         for a in old_args:
-            # Warning: can make copy!
-            args.append(np.atleast_1d(np.asanyarray(a)))
-        # Call wrapped function with new arguments
+            args.append(np.ravel(a))
         return function(*args, **kargs)
     return wraps(function)(wrapper)
 
-def broadcast(function):
+def atleast_1d(function):
     '''
-    Broacasts scalar and ndarray positional arguments
-    to ndarray **of same shape**, but leaves keyword arguments **untouched**.
-
-    Decorated functions may safely assume all positional arguments are numpy
-        arrays of same shape.
-
-    Rem. Preserve array subclasses (eg. np.ma.array)
-        by calling `np.asanyarray`
+    Decorated functions may safely assume all positional arguments are
+        numpy arrays with **at least* one dimension,
+        but leaves keyword arguments **untouched**.
     '''
     def wrapper(*args, **kargs):
-        # Broadcast all arguments
+        old_args = args
+        args = []
+        for a in old_args:
+            args.append(np.atleast_1d(a))
+        return function(*args, **kargs)
+    return wraps(function)(wrapper)
+
+def elbyel(function):
+    '''
+    Broacasts all positional arguments,
+        but leaves keyword arguments **untouched**.
+    Decorated functions may hence safely assume all positional
+        arguments are numpy arrays of same shape (with ndim>0).
+    '''
+    def wrapper(*args, **kargs):
+        old_args = args
+        args = []
+        for a in old_args:
+            args.append(np.atleast_1d(a))
         *args, = np.broadcast_arrays(*args)
-        # Call wrapped function with new arguments
         return function(*args, **kargs)
-    return wraps(function)(wrapper)
-
-def handle_scalar_input(function):
-    '''
-    When **all** inputs are scalar, array outputs are casted
-        to scalars, ie. with ndim=0 and size==1
-
-    Raises AssertionError if can not cast to scalar (mostly for debugging).
-
-    Rem. Outputted scalars are not of native types.
-        In particular, outputs are np.float64, not built-in float.
-    '''
-    def wrapper(*args, **kargs):
-        # Determine if scalar mode
-        scalar = True
-        for a in args:
-            a = np.asanyarray(a)
-            scalar = scalar and a.ndim==0
-            if not scalar:
-                break # Early termination if non-scalar detected
-
-        # Call wrapped function with at least 1D arguments
-        outputs = function(*args, **kargs)
-
-        # Post-process when in scalar mode
-        if scalar:
-            if not isinstance(outputs, tuple):
-                outputs = (outputs,)
-
-            new_outputs = []
-            for o in outputs:
-                assert isinstance(o, np.ndarray)
-                assert o.size == 1
-                # Convert size=1 arrays to scalar ndim=0
-                new_outputs.append(o[0])
-            outputs = tuple(new_outputs)
-
-            if len(outputs)==1:
-                outputs = outputs[0]
-
-        return outputs
     return wraps(function)(wrapper)
 
 def workon_axis(function):
