@@ -1,3 +1,5 @@
+# distutils: language = c++
+
 import numpy as np
 from scipy.integrate import quad
 from multiprocessing import Pool
@@ -13,9 +15,11 @@ cimport cython
 from libc.math cimport sqrt, fmax, fmin, fabs, INFINITY
 from pymaat.mathutil_c cimport _normcdf, _normpdf
 
-cdef extern from "complex.h":
-    double complex clog(double complex)
-    double complex cexp(double complex)
+cdef extern from "<complex.h>" namespace "std":
+    double complex exp(double complex z)
+    float complex exp(float complex z)  # overload
+    double complex log(double complex z)
+    float complex log(float complex z)  # overload
 
 np.import_array()
 
@@ -407,14 +411,16 @@ cdef class _HestonNandiGarch:
             double complex A=0., B=0.
             int t
         for t in range(T):
-            A += B*self.omega - 0.5*clog(1.-2.*B*self.alpha)
+            # A += B*self.omega - 0.5*clog(1.-2.*B*self.alpha)
+            A += B*self.omega - 0.5*log(1.-2.*B*self.alpha)
             B = (
                     -0.5*phi + B*(self.beta+self.alpha*self.gamma**2.)
                     + (0.5*phi**2. + 2.*B*self.alpha*self.gamma
                             *(B*self.alpha*self.gamma - phi))
                     / (1-2.*B*self.alpha)
                     )
-        return price**phi*cexp(A+B*variance)
+        return price**phi*exp(A+B*variance)
+        # return price**phi*cexp(A+B*variance)
 
     @cython.boundscheck(False)
     @cython.initializedcheck(False)

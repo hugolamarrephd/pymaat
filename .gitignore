@@ -3,6 +3,7 @@
 
 # Cython-generated c code
 *.c
+*.cpp
 
 # Editors
 *.swp #vim

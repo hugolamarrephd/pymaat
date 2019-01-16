@@ -50,7 +50,8 @@ setup(
             ],
         ext_modules=cythonize(
             [x + '*.pyx' for x in extensions_dir],
-            )
+            ),
+        include_dirs=[np.get_include()]
     )
 
 # Clean
