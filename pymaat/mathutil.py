@@ -17,11 +17,13 @@ def normcdf(x):
     normcdf_c(x, out)
     return out
 
+
 @atleast_1d
 def normpdf(x):
     out = np.empty_like(x)
     normpdf_c(x, out)
     return out
+
 
 @atleast_1d
 def norminv(p):
@@ -34,14 +36,18 @@ def norminv(p):
 
 # Logistic
 
+
 def logistic(x):
     return 1./(1.+np.exp(-x))
+
 
 def dlogistic(x):
     return logistic(x)*(1.-logistic(x))
 
+
 def ddlogistic(x):
     return dlogistic(x)*(1.-2.*logistic(x))
+
 
 def ilogistic(x):
     with np.errstate(divide='ignore', invalid='ignore'):

@@ -34,25 +34,31 @@ import pymaat.testing as pt
 #         pt.assert_greater_equal(values[idx[at+1:]], values[idx[at]],
 #                 shape='broad')
 
-@pytest.fixture(params = [189234,23418,12345])
+
+@pytest.fixture(params=[189234, 23418, 12345])
 def seed(self, request):
     np.random.seed(request.param)
+
 
 @pytest.fixture(params=[2])
 def ndim(request):
     return request.param
 
-@pytest.fixture(params=[100,1000,10000])
+
+@pytest.fixture(params=[100, 1000, 10000])
 def values(request, ndim):
     return np.random.normal(size=(request.param, ndim))
+
 
 @pytest.fixture(params=[1000000])
 def at(request, ndim):
     return np.random.normal(size=(request.param, ndim))
 
+
 @pytest.fixture
 def weight(ndim):
     return np.ones((ndim,))
+
 
 def test_kd_tree_versus_naive(values, at, weight):
     start_naive = time.time()

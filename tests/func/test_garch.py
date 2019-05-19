@@ -22,24 +22,25 @@ import matplotlib.colors
 import matplotlib.colorbar
 import time
 
-from pymaat.perf import timeblock
 
 @pytest.fixture
 def starting_variance():
     return 0.14**2./252.
 
+
 @pytest.fixture
 def nper():
     return 21
 
+
 @pytest.fixture
 def model():
     return HestonNandiGarch(
-                mu=2.04,
-                omega=3.28e-7,
-                alpha=4.5e-6,
-                beta=0.962,
-                gamma=0)
+        mu=2.04,
+        omega=3.28e-7,
+        alpha=4.5e-6,
+        beta=0.962,
+        gamma=0)
     # return HestonNandiGarch(
     #             mu=2.04,
     #             omega=3.28e-7,
@@ -47,26 +48,25 @@ def model():
     #             beta=0.8,
     #             gamma=190)
 
+
 @pytest.fixture
 def rnmodel():
     return HestonNandiGarch(
-                mu=0.,
-                omega=4.14e-7,
-                alpha=7.16e-6,
-                beta=0.8,
-                gamma=152)
+        mu=0.,
+        omega=4.14e-7,
+        alpha=7.16e-6,
+        beta=0.8,
+        gamma=152)
+
 
 class TestOptionPricing:
 
     @pytest.mark.parametrize('put', [True, False])
     def test(self, rnmodel, starting_variance, nper, put):
         normstrike = np.linspace(0.95, 1.05, 11)
-        with timeblock('pricing'):
-            p0 = rnmodel.option_price(
-                    normstrike, variance=starting_variance, T=nper, put=put)
-        with timeblock('brent'):
-            iv0 = bsiv.brent_dekker(normstrike, p0, put)
-        # with timeblock('sor'):
+        p0 = rnmodel.option_price(
+            normstrike, variance=starting_variance, T=nper, put=put)
+        iv0 = bsiv.brent_dekker(normstrike, p0, put)
         #     iv1 = bsiv.sor(normstrike, p0, put)
         print(iv0*np.sqrt(252./21)*100.)
 
@@ -77,7 +77,7 @@ class TestQuantization:
 
     @pytest.fixture
     def shape(self):
-        return (10,10)
+        return (10, 10)
 
     @pytest.fixture
     def nsim(self):
@@ -85,7 +85,7 @@ class TestQuantization:
 
     def _plot_at(self, core, t, path):
         root = '~/garch_quant/'
-        fig = plt.figure(figsize=(8,7), dpi=1000)
+        fig = plt.figure(figsize=(8, 7), dpi=1000)
         cbar_ax = fig.add_axes([0.87, 0.1, 0.03, 0.8])
         ax = fig.add_axes([0.1, 0.1, 0.75, 0.8])
         core.plot_at(t, ax, cbar_ax, quantizer_size=5)
@@ -94,13 +94,13 @@ class TestQuantization:
         # Set color bar
         cbar_ax.set_title('p (%)')
         plt.savefig(
-                os.path.expanduser(root+path+'.pdf'),
-                format='pdf'
-                )
+            os.path.expanduser(root+path+'.pdf'),
+            format='pdf'
+        )
         plt.close(fig)
 
     @pytest.mark.parametrize('type_',
-            ['marginal', 'markov', 'product', 'conditional'])
+                             ['marginal', 'markov', 'product', 'conditional'])
     def test(self, type_, model, starting_variance, nper, shape, nsim):
         kwargs = {}
         if type_ == 'marginal':
@@ -116,13 +116,13 @@ class TestQuantization:
         s = time.time()
         shape = 5
         tmp = quantization(
-                model=model,
-                shape=shape,
-                first_variance=starting_variance,
-                nper=nper,
-                verbose=self.verbose,
-                **kwargs
-                )
+            model=model,
+            shape=shape,
+            first_variance=starting_variance,
+            nper=nper,
+            verbose=self.verbose,
+            **kwargs
+        )
         e = time.time()
         print("Time: {}".format(e-s))
         print(np.sqrt(np.sum(tmp.estimate_distortion(nsim)**2.)))

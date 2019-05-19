@@ -20,7 +20,6 @@ class AbstractOneLagReturn(ABC):
         volatilities = np.sqrt(variances)
         return self._one_step_filter(returns, variances, volatilities)
 
-
     @abstractmethod
     def _one_step_generate(self, innovations, variances, volatilities):
         pass
@@ -35,7 +34,7 @@ class AbstractOneLagReturn(ABC):
     def roots(self, prev_logprice, prev_variance, logprice):
         prev_vol = np.sqrt(prev_variance)
         return self._roots(
-                prev_logprice, prev_variance, logprice, prev_vol)
+            prev_logprice, prev_variance, logprice, prev_vol)
 
     def _quantized_integral(
             self, prev_logprice, prev_variance, voronoi, I, d):
@@ -55,20 +54,19 @@ class AbstractOneLagReturn(ABC):
         # Memory allocation
         shape = (prev_logprice.size, voronoi.size-1)
         I = (
-                np.empty(shape),
-                np.empty(shape),
-                np.empty(shape)
-                )
+            np.empty(shape),
+            np.empty(shape),
+            np.empty(shape)
+        )
         shape = (prev_logprice.size, voronoi.size)
         d = (
-                np.empty(shape),
-                np.empty(shape)
-                )
+            np.empty(shape),
+            np.empty(shape)
+        )
         # Do computations
         self._quantized_integral(
-                prev_logprice, prev_variance, voronoi, I, d)
+            prev_logprice, prev_variance, voronoi, I, d)
         return I, d
-
 
     @method_decorator(ravel)
     def get_quant_factory(self, prev_proba, prev_logprice, prev_variance):
@@ -76,7 +74,7 @@ class AbstractOneLagReturn(ABC):
                 prev_proba.size
                 == prev_logprice.size
                 == prev_variance.size
-                ):
+        ):
             raise ValueError("Previous quantization size mismatch")
 
         retspec = self  # used in Factory's closure
@@ -93,18 +91,18 @@ class AbstractOneLagReturn(ABC):
                     def __init__(self, value):
                         super().__init__(value, prev_proba)
                         self._integral, self._delta = \
-                                retspec.quantized_integral(
+                            retspec.quantized_integral(
                                 prev_logprice,
                                 prev_variance,
                                 self.voronoi
-                                )
+                            )
 
                     def get_roots(self):
                         return retspec.roots(
-                                prev_logprice[:,np.newaxis],
-                                prev_variance[:,np.newaxis],
-                                self.voronoi
-                                )
+                            prev_logprice[:, np.newaxis],
+                            prev_variance[:, np.newaxis],
+                            self.voronoi
+                        )
 
                 return Quantizer(value)
 
@@ -112,12 +110,11 @@ class AbstractOneLagReturn(ABC):
                 plb = retspec.one_step_generate(-crop, prev_variance)
                 pub = retspec.one_step_generate(crop, prev_variance)
                 return np.array([
-                        np.amin(prev_logprice + plb),
-                        np.amax(prev_logprice + pub)
-                        ])
+                    np.amin(prev_logprice + plb),
+                    np.amax(prev_logprice + pub)
+                ])
 
         return Factory()
-
 
 
 class AbstractOneLagGarch(ABC):
@@ -155,7 +152,6 @@ class AbstractOneLagGarch(ABC):
     def _real_roots(self, variances, next_variances):
         raise NotImplementedError
 
-
     def _quantized_integral(self, prev_variances, zlb, zub, voronoi, I, d):
         """
         I[order][i,j] is the following expectation:
@@ -187,7 +183,7 @@ class AbstractOneLagGarch(ABC):
         single_path = False
         if returns.ndim == 1:
             single_path = True
-            returns = returns[:,np.newaxis]
+            returns = returns[:, np.newaxis]
 
         # Initialize outputs
         variances = self._init_like(returns, first_variances)
@@ -195,7 +191,7 @@ class AbstractOneLagGarch(ABC):
 
         # Do computations and return
         variances, innovations = self._timeseries_filter(
-                returns, variances, innovations)
+            returns, variances, innovations)
 
         if single_path:
             return np.ravel(variances), np.ravel(innovations)
@@ -210,8 +206,8 @@ class AbstractOneLagGarch(ABC):
             Implementing classes are strongly encouraged to override
             (eg using cython) for efficiency.
         """
-        for (t,(r,h)) in enumerate(zip(returns, variances)):
-            (variances[t+1], innovations[t]) = self.one_step_filter(r,h)
+        for (t, (r, h)) in enumerate(zip(returns, variances)):
+            (variances[t+1], innovations[t]) = self.one_step_filter(r, h)
 
     def timeseries_generate(
             self, innovations, first_variances, first_logprice=None):
@@ -219,13 +215,13 @@ class AbstractOneLagGarch(ABC):
         When passing a first_logprice,
             this function returns (variance, logprice)
             where first row corresponds to initial values,
-            i.e.\ (first_variance, first_logprice)
+            i.e. (first_variance, first_logprice)
         """
         self._raise_value_error_if_any_invalid_variance(first_variances)
         single_path = False
         if innovations.ndim == 1:
             single_path = True
-            innovations = innovations[:,np.newaxis]
+            innovations = innovations[:, np.newaxis]
         variances = self._init_like(innovations, first_variances)
         if first_logprice is None:  # Return mode!
             out = np.empty_like(innovations)
@@ -246,13 +242,13 @@ class AbstractOneLagGarch(ABC):
             Implementing classes are strongly encouraged to override
             (eg using cython) for efficiency.
         """
-        for (t,(z,h)) in enumerate(zip(innovations, variances)):
-            (variances[t+1], returns[t]) = self.one_step_generate(z,h)
+        for (t, (z, h)) in enumerate(zip(innovations, variances)):
+            (variances[t+1], returns[t]) = self.one_step_generate(z, h)
 
     def _timeseries_generate_logprices(
             self, innovations, variances, logprices):
-        for (t,(z,h)) in enumerate(zip(innovations, variances)):
-            (variances[t+1], returns) = self.one_step_generate(z,h)
+        for (t, (z, h)) in enumerate(zip(innovations, variances)):
+            (variances[t+1], returns) = self.one_step_generate(z, h)
             logprices[t+1] = logprices[t] + returns
 
     ############
@@ -264,9 +260,9 @@ class AbstractOneLagGarch(ABC):
         self._raise_value_error_if_any_invalid_variance(variances)
         volatilities = np.sqrt(variances)
         innovations = self.retspec._one_step_filter(
-                returns, variances, volatilities)
+            returns, variances, volatilities)
         next_variances = self._equation(
-                innovations, variances, volatilities)
+            innovations, variances, volatilities)
         return (next_variances, innovations)
 
     @method_decorator(elbyel)
@@ -274,11 +270,10 @@ class AbstractOneLagGarch(ABC):
         self._raise_value_error_if_any_invalid_variance(variances)
         volatilities = np.sqrt(variances)
         returns = self.retspec._one_step_generate(
-                innovations, variances, volatilities)
+            innovations, variances, volatilities)
         next_variances = self._equation(
-                innovations, variances, volatilities)
+            innovations, variances, volatilities)
         return (next_variances, returns)
-
 
     ################
     # Quantization #
@@ -294,9 +289,9 @@ class AbstractOneLagGarch(ABC):
             zub = np.full(shape, np.inf)
         # Input checks
         if not (prev_proba.size == prev_value.size == zlb.size == zub.size):
-            raise ValueError( "Previous quantization size mismatch")
+            raise ValueError("Previous quantization size mismatch")
         if np.any(zub < zlb):
-            raise ValueError( "Invalid innovation bounds")
+            raise ValueError("Invalid innovation bounds")
 
         # Compute transition probability and normalization factor
         trans = normcdf(zub) - normcdf(zlb)
@@ -319,10 +314,10 @@ class AbstractOneLagGarch(ABC):
                     def __init__(self, value):
                         super().__init__(value, prev_proba, norm=norm)
                         self._integral, self._delta = \
-                                model.quantized_integral(
+                            model.quantized_integral(
                                 prev_value, zlb, zub,
                                 self.voronoi
-                                )
+                            )
 
                 return _Quantizer(value)
 
@@ -336,10 +331,10 @@ class AbstractOneLagGarch(ABC):
                     else:
                         raise ValueError("Could not get search bounds")
                 hlb, hub = model.one_step_bounds(
-                        prev_value[valid],
-                        _zlb[valid],
-                        _zub[valid]
-                        )
+                    prev_value[valid],
+                    _zlb[valid],
+                    _zub[valid]
+                )
                 return np.array([np.amin(hlb), np.amax(hub)])
 
         return _VarianceQuantizerFactory()
@@ -348,15 +343,15 @@ class AbstractOneLagGarch(ABC):
     def quantized_integral(self, prev_variances, zlb, zub, voronoi):
         shape = (prev_variances.size, voronoi.size-1)
         I = (
-                np.empty(shape),
-                np.empty(shape),
-                np.empty(shape)
-                )
+            np.empty(shape),
+            np.empty(shape),
+            np.empty(shape)
+        )
         shape = (prev_variances.size, voronoi.size)
         d = (
-                np.empty(shape),
-                np.empty(shape)
-                )
+            np.empty(shape),
+            np.empty(shape)
+        )
         self._quantized_integral(prev_variances, zlb, zub, voronoi, I, d)
         return I, d
 
@@ -365,23 +360,26 @@ class AbstractOneLagGarch(ABC):
     ##################
 
     def american_option_lsm(self,
-            innovations, normstrike, variance, rate, *,  put=False):
+                            innovations, normstrike, variance, rate, *,  put=False):
         T = innovations.shape[0]
         if put:
-            payoff = lambda p, k: np.maximum(k-p, 0)
-            in_the_money = lambda p, k: k>p
+            def payoff(p, k): return np.maximum(k-p, 0)
+
+            def in_the_money(p, k): return k > p
         else:
-            payoff = lambda p, k: np.maximum(p-k, 0)
-            in_the_money = lambda p, k: k<p
+            def payoff(p, k): return np.maximum(p-k, 0)
+
+            def in_the_money(p, k): return k < p
         variance, logforward = self.timeseries_generate(
-                innovations, variance, first_logprice=0)
-        spot = np.exp(logforward + (np.arange(T+1)*rate)[:,np.newaxis])
+            innovations, variance, first_logprice=0)
+        spot = np.exp(logforward + (np.arange(T+1)*rate)[:, np.newaxis])
+
         def get_price(k):
             # Initialize cash flows
             cashflow = payoff(spot[-1], k)
             flag = np.empty_like(cashflow, bool)
             value = np.empty_like(cashflow)
-            for t in range(T-1,-1,-1):  # Backward recursion
+            for t in range(T-1, -1, -1):  # Backward recursion
                 # Currently ITM?
                 itm = in_the_money(spot[t], k)
                 # Discount cash flows for one step
@@ -391,20 +389,20 @@ class AbstractOneLagGarch(ABC):
                     p = spot[t][itm]
                     h = variance[t][itm]
                     X = np.column_stack(
-                            (np.ones_like(p), p, h, p**2., h**2., p*h))
+                        (np.ones_like(p), p, h, p**2., h**2., p*h))
                     # Do regression
-                    betas, _, _, _= np.linalg.lstsq(X, cashflow[itm])
+                    betas, _, _, _ = np.linalg.lstsq(X, cashflow[itm])
                     continuation = X.dot(betas)
                     exercise = payoff(p, k)
                     # Update cash-flow vector
                     flag[:] = False
-                    flag[itm] = exercise>continuation
+                    flag[itm] = exercise > continuation
                     value[itm] = exercise
                     cashflow[flag] = value[flag]
             return np.mean(cashflow)
 
         result = np.empty_like(normstrike)
-        for (n,k) in enumerate(normstrike):
+        for (n, k) in enumerate(normstrike):
             result[n] = get_price(k)
         return result
 
@@ -425,11 +423,11 @@ class AbstractOneLagGarch(ABC):
         T = innovations.shape[0]
         nsim = innovations.shape[1]
         variance, logprice = self.timeseries_generate(
-                innovations, first_variance, first_logprice=0)
+            innovations, first_variance, first_logprice=0)
         price = np.exp(logprice)
         # Sale price
         c0 = risk_neutral.option_price(
-                price[0][0], strike, variance[0][0], T=T, put=put)
+            price[0][0], strike, variance[0][0], T=T, put=put)
         # Initialize portfolio
         v = np.empty((nsim,))
         if v0 is None:
@@ -441,31 +439,21 @@ class AbstractOneLagGarch(ABC):
         # Do backtest
         delta = np.empty_like(innovations)
         for t in range(T):
-            print(t)
             delta[t] = get_hedge(
-                    price[t],
-                    strike*np.ones((nsim,)),
-                    variance[t],
-                    v,
-                    tau=T-t,
-                    put=put,
-                    )
+                price[t],
+                strike*np.ones((nsim,)),
+                variance[t],
+                v,
+                tau=T-t,
+                put=put,
+            )
             v += delta[t] * (price[t+1] - price[t])
-        liability = np.maximum(price[-1]-strike,0.)
+        liability = np.maximum(price[-1]-strike, 0.)
         if put:
-            liability += -price[-1] + strike # Put-call parity
-        print(c0)
-        print(v0)
+            liability += -price[-1] + strike  # Put-call parity
         pnl = c0 + (v-v0) - liability
 
-        # import matplotlib.pyplot as plt
-        # plt.scatter(np.ravel(price[0:-1]), np.ravel(delta))
-        # plt.show()
-        # plt.scatter(price[-1], pnl)
-        # plt.show()
-
         return pnl, delta, price[-1]
-
 
     #############
     # Utilities #
@@ -473,7 +461,7 @@ class AbstractOneLagGarch(ABC):
 
     @staticmethod
     def _raise_value_error_if_any_invalid_variance(var):
-        if not np.all(np.isfinite(var)) or np.any(var<=0):
+        if not np.all(np.isfinite(var)) or np.any(var <= 0):
             raise ValueError("Invalid variance detected.")
 
     @staticmethod

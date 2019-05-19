@@ -9,6 +9,7 @@ import matplotlib.colorbar
 from pymaat.mathutil import round_to_int
 import pymaat.plotutil
 
+
 def quant_values_3_by_3(core):
     fig = plt.figure()
 

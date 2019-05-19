@@ -10,6 +10,7 @@ SPACE = np.power(np.finfo(float).eps, 1/3)
 Optimal delta(x) spacing for central difference method
 '''
 
+
 @atleast_1d
 def derivative_at(x, *, function=None, mode='central'):
     _chk_fcn(function)
@@ -21,22 +22,22 @@ def derivative_at(x, *, function=None, mode='central'):
         return dx
 
     dx = _get_dx(x)
-    if mode.lower()=='central':
+    if mode.lower() == 'central':
         return (function(x+dx) - function(x-dx))/(2.*dx)
-    elif mode.lower()=='forward':
+    elif mode.lower() == 'forward':
         return (function(x+dx) - function(x))/dx
-    elif mode.lower()=='backward':
+    elif mode.lower() == 'backward':
         return (function(x) - function(x-dx))/dx
     else:
         raise ValueError("Unexpected finite difference mode: "
-                "expecting 'central', 'forward', or 'backward'.")
+                         "expecting 'central', 'forward', or 'backward'.")
 
 
 @atleast_1d
 def gradient_at(x, *, function=None, mode='central'):
     _chk_fcn(function)
     grad = np.empty(x.shape, dtype=np.float_)
-    for (i,_x) in enumerate(x):
+    for (i, _x) in enumerate(x):
         def _1d_to_1d(x_scalar):
             xcopy = x.copy()
             xcopy[i] = x_scalar
@@ -45,13 +46,14 @@ def gradient_at(x, *, function=None, mode='central'):
 
     return grad
 
+
 @atleast_1d
 def jacobian_at(x, *, function=None, mode='central'):
     _chk_fcn(function)
     # Determine size of function
     m = np.atleast_1d(function(x)).size
     n = x.size
-    jac = np.empty((m,n), dtype=np.float_)
+    jac = np.empty((m, n), dtype=np.float_)
     for i in range(m):
         def _nd_to_1d(x):
             f_ = function(x)
@@ -59,12 +61,13 @@ def jacobian_at(x, *, function=None, mode='central'):
         jac[i] = gradient_at(x, function=_nd_to_1d, mode=mode)
     return jac
 
+
 @atleast_1d
 def hessian_at(x, *, function=None, mode='central'):
     _chk_fcn(function)
     n = x.size
-    hess = np.empty((n,n), dtype=np.float_)
-    for (i,_x) in enumerate(x):
+    hess = np.empty((n, n), dtype=np.float_)
+    for (i, _x) in enumerate(x):
         def _grad_i(x_scalar):
             xcopy = x.copy()
             xcopy[i] = x_scalar
@@ -72,7 +75,7 @@ def hessian_at(x, *, function=None, mode='central'):
         hess[i] = derivative_at(_x, function=_grad_i,  mode=mode)
     return hess
 
+
 def _chk_fcn(func):
     if not callable(func):
         raise ValueError('Please provide valid function')
-

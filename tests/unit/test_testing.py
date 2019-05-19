@@ -309,7 +309,6 @@ class TestEmptyArraysCompare:
                 np.array([], dtype=np.float_))
 
 
-
 class TestFloatArrayCompare:
 
     @pytest.fixture(params=all_floatarr(),

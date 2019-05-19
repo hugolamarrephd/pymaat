@@ -289,6 +289,7 @@ class TestOneStep():
         der = model.real_roots(variances, inf)[1]
         pt.assert_equal(der, 0., shape='broad')
 
+
 class TestVarianceQuantization():
 
     @pytest.fixture(params=[1, 4, 3, 10],
@@ -346,19 +347,19 @@ class TestVarianceQuantization():
     def test_size_mismatch_raises_value_error(self, model):
         with pytest.raises(ValueError):
             model.get_quant_factory(np.array([1., 2.]),
-                                       np.array(1.),
-                                       np.array(0.),
-                                       np.array(1.))
+                                    np.array(1.),
+                                    np.array(0.),
+                                    np.array(1.))
         with pytest.raises(ValueError):
             model.get_quant_factory(np.array([1., 2.]),
-                                       np.array([1., 2.]),
-                                       np.array(0.),
-                                       np.array(1.))
+                                    np.array([1., 2.]),
+                                    np.array(0.),
+                                    np.array(1.))
         with pytest.raises(ValueError):
             model.get_quant_factory(np.array([1., 2.]),
-                                       np.array([1., 2.]),
-                                       np.array([1., 2.]),
-                                       np.array(1.))
+                                    np.array([1., 2.]),
+                                    np.array([1., 2.]),
+                                    np.array(1.))
 
     def test_unattainable_state_raises_unobserved(
             self, prev_size, prev_proba, model, prev_value):
@@ -419,7 +420,7 @@ class TestVarianceQuantization():
     ########################
 
     def _quantized_integral(self,
-            model, prev_value, zlb, zub, value, *, order=None):
+                            model, prev_value, zlb, zub, value, *, order=None):
         if order == 0:
             def integrand(z, H): return normpdf(z)
         elif order == 1:
@@ -482,24 +483,25 @@ class TestRetSpec():
         prev_variance = variances
         #
         der = retspec.roots(prev_logprice, prev_variance, logprice)[1]
+
         def func_to_derivate(lp):
             return retspec.roots(prev_logprice, prev_variance, lp)[0]
         pt.assert_derivative_at(der, logprice, function=func_to_derivate)
 
-    @pytest.fixture(params=[1,4,3,10],
-            ids=[
-            'prev_size(1)',
-            'prev_size(4)',
-            'prev_size(3)',
-            'prev_size(10)',
-            ])
+    @pytest.fixture(params=[1, 4, 3, 10],
+                    ids=[
+        'prev_size(1)',
+        'prev_size(4)',
+        'prev_size(3)',
+        'prev_size(10)',
+    ])
     def prev_size(self, request):
         return request.param
 
     @pytest.fixture
     def prev_logprice(self, prev_size, variance_scale):
         np.random.seed(8923476)
-        z =  np.random.normal(size=(prev_size,))
+        z = np.random.normal(size=(prev_size,))
         vol = np.sqrt(variance_scale)
         return z*vol
 
@@ -525,7 +527,7 @@ class TestRetSpec():
     @pytest.fixture
     def factory(self, retspec, prev_proba, prev_logprice, prev_variance):
         return retspec.get_quant_factory(
-                prev_proba, prev_logprice, prev_variance)
+            prev_proba, prev_logprice, prev_variance)
 
     @pytest.fixture(params=[1, 2, 3, 5],
                     ids=['size(1)',
@@ -550,11 +552,11 @@ class TestRetSpec():
     def test_size_mismatch_raises_value_error(self, retspec):
         with pytest.raises(ValueError):
             retspec.get_quant_factory(
-                    np.empty((5,3)), np.empty((10,1)), np.empty((1,10)))
+                np.empty((5, 3)), np.empty((10, 1)), np.empty((1, 10)))
 
     def test_search_bounds(self, factory):
         b = factory.get_search_bounds(3.)
-        assert b.size==2
+        assert b.size == 2
         pt.assert_finite(b)
         assert b[0] < b[1]
 
@@ -563,13 +565,14 @@ class TestRetSpec():
     def test_roots(
             self, retspec, prev_variance, prev_logprice, quantizer):
         roots = quantizer.get_roots()[0]
-        returns = retspec.one_step_generate(roots, prev_variance[:,np.newaxis])
-        values = prev_logprice[:,np.newaxis] + returns
+        returns = retspec.one_step_generate(
+            roots, prev_variance[:, np.newaxis])
+        values = prev_logprice[:, np.newaxis] + returns
         pt.assert_almost_equal(values, quantizer.voronoi, shape='broad')
 
     @pytest.mark.parametrize("order", [0, 1, 2])
     def test_integral(self, model, prev_size, size,
-            prev_logprice, prev_variance, quantizer, order):
+                      prev_logprice, prev_variance, quantizer, order):
         # Compute expected integral for all previous values
         expected = np.empty((prev_size, size))
         for (plp, pv, out) in zip(prev_logprice, prev_variance, expected):
@@ -596,13 +599,14 @@ class TestRetSpec():
             self, retspec, prev_logprice, prev_variance, value,
             *, order=None):
         if order == 0:
-            def integrand(z,X): return normpdf(z)
+            def integrand(z, X): return normpdf(z)
         elif order == 1:
-            def integrand(z,X): return X*normpdf(z)
+            def integrand(z, X): return X*normpdf(z)
         elif order == 2:
-            def integrand(z,X): return X**2.*normpdf(z)
+            def integrand(z, X): return X**2.*normpdf(z)
         else:
             assert False  # should never happen...
+
         def do_quantized_integration(bounds):
             def function_to_integrate(innov):
                 r = retspec.one_step_generate(innov, prev_variance)

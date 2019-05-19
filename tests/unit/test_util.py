@@ -19,12 +19,14 @@ def class_with_lazy_property():
 
     return dummy_class
 
+
 def test_lazy_property(class_with_lazy_property):
     instance = class_with_lazy_property()
     assert instance.dummy_property == 1234
     assert class_with_lazy_property.side_effect == 1
 
 # Method decorator
+
 
 @pytest.fixture
 def class_with_method_decorator():
@@ -40,6 +42,7 @@ def class_with_method_decorator():
             self.b = b
 
     return dummy_class
+
 
 def test_method_decorator_for_instances(class_with_method_decorator):
     instance = class_with_method_decorator()

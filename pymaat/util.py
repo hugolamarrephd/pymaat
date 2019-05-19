@@ -1,4 +1,5 @@
-from functools import wraps, update_wrapper
+from functools import update_wrapper, wraps
+
 
 class PymaatException(Exception):
     pass
@@ -6,6 +7,7 @@ class PymaatException(Exception):
 ##############
 # Properties #
 ##############
+
 
 class lazy_property:
     def __init__(self, func):
@@ -24,6 +26,7 @@ class lazy_property:
 # Decorators #
 ##############
 
+
 def no_exception(function):
     def wrapper(*args, **kargs):
         try:
@@ -31,6 +34,7 @@ def no_exception(function):
         except:
             pass
     return wraps(function)(wrapper)
+
 
 def method_decorator(decorator):
     """

@@ -34,6 +34,7 @@ CMAP = matplotlib.cm.get_cmap('gnuplot2').reversed()
 class UnobservedState(PymaatException):
     pass
 
+
 def chunked_generator(chunksize=100000):
     def decorator(f):
         @wraps(f)
@@ -53,13 +54,13 @@ class AbstractCore:
     SEP = "\n" + ("#"*75) + "\n"
 
     def __init__(self, *,
-            shape=100,
-            nper=None,
-            verbose=False,
-            chunksize=100000,  # May be tuned for simulation performance
-            parallel=False,
-            **kwargs
-            ):
+                 shape=100,
+                 nper=None,
+                 verbose=False,
+                 chunksize=100000,  # May be tuned for simulation performance
+                 parallel=False,
+                 **kwargs
+                 ):
         """
         Inputs:
             * `first_quantization` is an instance of AbstractQuantization
@@ -132,21 +133,21 @@ class AbstractCore:
                 )
             if sim.shape[0] != 1:
                 raise ValueError(
-                        "Unexpected number of simulations "
-                        "from simulation call"
-                        )
+                    "Unexpected number of simulations "
+                    "from simulation call"
+                )
             if sim.shape[1] != self.ndim:
                 raise ValueError(
-                        "Unexpected number of dimensions "
-                        "from simulation call"
-                        )
+                    "Unexpected number of dimensions "
+                    "from simulation call"
+                )
 
         for first_sim, sim in self.simulator(1):
             if len(sim) != self.nper:
                 raise ValueError(
-                        "Unexpected number of periods "
-                        "from simulation call"
-                        )
+                    "Unexpected number of periods "
+                    "from simulation call"
+                )
             _check_sim(first_sim)
             for s in sim:
                 _check_sim(s)
@@ -174,10 +175,12 @@ class AbstractMarkovianCore(AbstractCore):
         result = []
         for n, (s, w) in enumerate(zip(self.shapes, self.weights)):
             # Forward time recursion
-            if self.verbose: print(self.SEP + "[time={0:d}] ".format(n+1))
+            if self.verbose:
+                print(self.SEP + "[time={0:d}] ".format(n+1))
             q = self.one_step_optimize(s, q, w)
             result.append(q)  # Save result
-            if self.verbose: print(self.SEP)
+            if self.verbose:
+                print(self.SEP)
         return result
 
     @abstractmethod
@@ -199,7 +202,7 @@ class _VoronoiCoreMixin:
             nlloyd=10,
             fullsplit=True,
             **kwargs
-            ):
+    ):
         # Check shapes
         # TODO: support different shapes for each timestep
         if last_step >= 1.:
@@ -230,13 +233,14 @@ class _VoronoiCoreMixin:
             nsim = _MAX
         return np.int(nsim)
 
+
 class AbstractMarginalVoronoiCore(_VoronoiCoreMixin, AbstractCore):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
     def optimize(self):
-        if  np.any(np.unique(self.shapes) != self.shapes[0][0]):
+        if np.any(np.unique(self.shapes) != self.shapes[0][0]):
             raise ValueError("Unexpected shapes for Voronoi Quantization")
         # TODO: verbose?
         # Step 0: Get some random starting values
@@ -246,15 +250,15 @@ class AbstractMarginalVoronoiCore(_VoronoiCoreMixin, AbstractCore):
         # Step I: Do competitive learning
         if self.fullsplit:
             quantizer = [
-                    np.zeros((0, self.ndim))
-                    for n in range(self.nper)
-                    ]
+                np.zeros((0, self.ndim))
+                for n in range(self.nper)
+            ]
             distortion = None
             for to_add in zip(*starting):
                 quantizer = [
-                        np.append(q, x[np.newaxis,:], axis=0)
-                        for (q,x) in zip(quantizer, to_add)
-                        ]
+                    np.append(q, x[np.newaxis, :], axis=0)
+                    for (q, x) in zip(quantizer, to_add)
+                ]
                 distortion = self._inplace_clvq(quantizer, distortion)
         else:
             quantizer = [s.copy() for s in starting]
@@ -267,9 +271,9 @@ class AbstractMarginalVoronoiCore(_VoronoiCoreMixin, AbstractCore):
         result = []
         for n in range(self.nper):
             result.append(
-                    VoronoiQuantization(
-                        quantizer[n], self.bounds, self.weights[n,:])
-                    )
+                VoronoiQuantization(
+                    quantizer[n], self.bounds, self.weights[n, :])
+            )
             # Link to previous
             if n == 0:
                 result[-1].set_previous(self.first_quantization)
@@ -288,13 +292,13 @@ class AbstractMarginalVoronoiCore(_VoronoiCoreMixin, AbstractCore):
         for _, sim in self.simulator(nsim):
             def func(n):
                 N[n], cumul_distortion[n] = qutilc.inplace_clvq(
-                        sim[n],
-                        quantizer[n],
-                        self.weights[n,:],
-                        *self.get_learning_parameters(size, distortion[n]),
-                        N[n],
-                        cumul_distortion[n]
-                        )
+                    sim[n],
+                    quantizer[n],
+                    self.weights[n, :],
+                    *self.get_learning_parameters(size, distortion[n]),
+                    N[n],
+                    cumul_distortion[n]
+                )
             if self.parallel:
                 p = Pool()
                 p.map(func, range(self.nper))
@@ -313,12 +317,12 @@ class AbstractMarginalVoronoiCore(_VoronoiCoreMixin, AbstractCore):
         for _, sim in self.simulator(nsim):
             def func(n):
                 qutilc.lloyd1(
-                        sim[n],
-                        quantizer[n],
-                        self.weights[n,:],
-                        count[n],
-                        cumul[n]
-                        )
+                    sim[n],
+                    quantizer[n],
+                    self.weights[n, :],
+                    count[n],
+                    cumul[n]
+                )
             if self.parallel:
                 p = Pool()
                 p.map(func, range(self.nper))
@@ -329,28 +333,29 @@ class AbstractMarginalVoronoiCore(_VoronoiCoreMixin, AbstractCore):
         # In-place modification of quantizer
         for n in range(self.nper):
             quantizer[n] += cumul[n]
-            quantizer[n] /= (count[n]+1)[:,np.newaxis]
+            quantizer[n] /= (count[n]+1)[:, np.newaxis]
 
     def _estimate_and_set_transition_probability(
             self, quantizations, *, max_ntry=10):
         # TODO: use sparse matrices here
         nsim = self.get_nsim(self.shapes[0][0])
+
         def do(cumul=None, N=None, ntry=0):
             if cumul is None:
                 cumul = [
-                        q._init_joint_probability()
-                        for q in quantizations
-                        ]
+                    q._init_joint_probability()
+                    for q in quantizations
+                ]
             if N is None:
                 N = np.zeros((self.nper,), np.uint64)
             for first_sim, sim in self.simulator(nsim):
                 def func(n):
-                    if n>0:
+                    if n > 0:
                         N[n] = quantizations[n]._cumul_joint_probability(
-                                sim[n-1], sim[n], N[n], cumul[n])
+                            sim[n-1], sim[n], N[n], cumul[n])
                     else:
                         N[0] = quantizations[0]._cumul_joint_probability(
-                                first_sim, sim[0], N[0], cumul[0])
+                            first_sim, sim[0], N[0], cumul[0])
                 if self.parallel:
                     p = Pool()
                     p.map(func, range(self.nper))
@@ -367,10 +372,10 @@ class AbstractMarginalVoronoiCore(_VoronoiCoreMixin, AbstractCore):
                     else:  # Fail-safe: try again (i.e. more simulations)
                         ntry += 1
                         warnings.warn(
-                                "Unobserved state(s) "
-                                + "[Try #{0:d} out of {1:d}]".format(
-                                    ntry, max_ntry)
-                                )
+                            "Unobserved state(s) "
+                            + "[Try #{0:d} out of {1:d}]".format(
+                                ntry, max_ntry)
+                        )
                         N, cumul = do(cumul, N, ntry)
             return N, cumul
         do()
@@ -379,7 +384,7 @@ class AbstractMarginalVoronoiCore(_VoronoiCoreMixin, AbstractCore):
 class AbstractMarkovianVoronoiCore(
         _VoronoiCoreMixin,
         AbstractMarkovianCore
-        ):
+):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -395,9 +400,9 @@ class AbstractMarkovianVoronoiCore(
             quantizer = np.zeros((0, self.ndim))
             distortion = 1.
             for x0 in starting:
-                quantizer = np.append(quantizer, x0[np.newaxis,:], axis=0)
+                quantizer = np.append(quantizer, x0[np.newaxis, :], axis=0)
                 distortion = self._inplace_clvq(
-                       simulator, quantizer, weight, distortion)
+                    simulator, quantizer, weight, distortion)
         else:
             quantizer = starting.copy()
             self._inplace_clvq(simulator, quantizer, weight)
@@ -408,10 +413,10 @@ class AbstractMarkovianVoronoiCore(
         result = VoronoiQuantization(quantizer, self.bounds, weight)
         result.set_previous(previous)
         result.estimate_and_set_transition_probability(
-                simulate, ## TODO: pass simulator directly
-                self.get_nsim(shape),
-                chunksize=self.chunksize
-                )
+            simulate,  # TODO: pass simulator directly
+            self.get_nsim(shape),
+            chunksize=self.chunksize
+        )
         return result
 
     def _inplace_clvq(self, simulator, quantizer, weight, distortion=1.):
@@ -421,13 +426,13 @@ class AbstractMarkovianVoronoiCore(
         nsim = self.get_nsim(size)
         for _, sim in simulator(nsim):
             N, cumul_distortion = qutilc.inplace_clvq(
-                    sim,
-                    quantizer,
-                    weight,
-                    *self.get_learning_parameters(size, distortion),
-                    N,
-                    cumul_distortion
-                    )
+                sim,
+                quantizer,
+                weight,
+                *self.get_learning_parameters(size, distortion),
+                N,
+                cumul_distortion
+            )
         return cumul_distortion/N
 
     def _inplace_lloyd1(self, simulator, quantizer, weight):
@@ -438,7 +443,7 @@ class AbstractMarkovianVoronoiCore(
         for _, sim in simulator(self.get_nsim(size)):
             qutilc.lloyd1(sim, quantizer, weight, count, cumul)
         quantizer += cumul
-        quantizer /= (count+1)[:,np.newaxis]
+        quantizer /= (count+1)[:, np.newaxis]
 
 
 #################
@@ -476,13 +481,13 @@ class AbstractQuantization:
         # Otherwise calls to np.random.choice fail silently
         if self.probability is None:
             raise ValueError(
-                    "Probabilities must be set in order to simulate")
+                "Probabilities must be set in order to simulate")
         states = np.random.choice(
-                self.size,
-                nsim,
-                p=np.ravel(self.probability)
-                )
-        return self._ravel()[states,:]
+            self.size,
+            nsim,
+            p=np.ravel(self.probability)
+        )
+        return self._ravel()[states, :]
 
     #########
     # State #
@@ -517,7 +522,7 @@ class AbstractQuantization:
     def set_transition_probability(self, trans):
         if self.previous is None:
             raise ValueError("Previous quantization must be set prior"
-                    "to transition probabilities")
+                             "to transition probabilities")
         current_ax = tuple(range(-len(self.shape), 0))
         eps = 1e-12
         if trans.shape != self.previous.shape + self.shape:
@@ -549,7 +554,6 @@ class AbstractQuantization:
             raise ValueError("Must be a quantization")
         self.previous = previous
 
-
     ##########################
     # Probability Estimation #
     ##########################
@@ -558,21 +562,22 @@ class AbstractQuantization:
             self, one_step_simulate, nsim,
             *,
             max_ntry=10, chunksize=100000
-            ):
+    ):
         '''
         one_step_simulate(nsim) must return (prev_simul, simul) tuples
             containing arrays of shape [nsim, ndim]
         '''
         if self.previous is None:
             raise ValueError("Previous quantization must be set prior"
-                    "to estimating transition probabilities")
+                             "to estimating transition probabilities")
         simulator = chunked_generator(chunksize)(one_step_simulate)
+
         def do(N=0, cumul=None, ntry=0):
             if cumul is None:
                 cumul = self._init_joint_probability()
             for prev_simul, simul in simulator(nsim):
                 N = self._cumul_joint_probability(
-                        prev_simul, simul, N, cumul)
+                    prev_simul, simul, N, cumul)
             try:
                 self._set_joint_probability(N, cumul)
             except UnobservedState:
@@ -581,10 +586,10 @@ class AbstractQuantization:
                 else:  # Fail-safe: try again (i.e. more simulations)
                     ntry += 1
                     warnings.warn(
-                            "Unobserved state(s) "
-                            + "[Try #{0:d} out of {1:d}]".format(
-                                ntry, max_ntry)
-                            )
+                        "Unobserved state(s) "
+                        + "[Try #{0:d} out of {1:d}]".format(
+                            ntry, max_ntry)
+                    )
                     N, cumul = do(N, cumul, ntry)
             return N, cumul
         do()
@@ -623,11 +628,12 @@ class AbstractQuantization:
             self, simulate, nsim,
             *,
             strict=True, max_ntry=10, chunksize=100000
-            ):
+    ):
         '''
         simulate(nsim) must return a np.array of shape [nsim, ndim]
         '''
         simulator = chunked_generator(chunksize)(simulate)
+
         def do(N=0, cumul=None, ntry=0):
             if cumul is None:
                 cumul = self._init_probability()
@@ -638,13 +644,13 @@ class AbstractQuantization:
                 except UnobservedState:
                     if ntry >= max_ntry:
                         raise UnobservedState
-                    else: # Fail-safe: try again (i.e. with more simulations)
+                    else:  # Fail-safe: try again (i.e. with more simulations)
                         ntry += 1
                         warnings.warn(
-                                "Unobserved state(s) failsafe "
-                                + "[Try #{0:d} out of {1:d}]".format(
-                                    ntry, max_ntry)
-                                )
+                            "Unobserved state(s) failsafe "
+                            + "[Try #{0:d} out of {1:d}]".format(
+                                ntry, max_ntry)
+                        )
                         N, cumul = do(N, cumul, ntry)
             return N, cumul
         do()
@@ -702,10 +708,10 @@ class AbstractQuantization:
                ):
 
         if formatter1 is None:
-            formatter1 = lambda x:x
+            def formatter1(x): return x
 
         if formatter2 is None:
-            formatter2 = lambda x:x
+            def formatter2(x): return x
 
         if self.probability is None:
             raise ValueError("Probability must be set for plotting")
@@ -728,10 +734,10 @@ class AbstractQuantization:
         plim = np.array(plim)*100.  # Probability displayed in percentage
         colornorm = matplotlib.colors.Normalize(*plim)
         self._plot2d_tiles(
-                ax, lim, colormap, colornorm, formatter1, formatter2)
+            ax, lim, colormap, colornorm, formatter1, formatter2)
 
         # # Plot Quantizers
-        if quantizer_size>0:
+        if quantizer_size > 0:
             ax.scatter(formatter1(quantizer[:, 0]),
                        formatter2(quantizer[:, 1]),
                        s=quantizer_size,
@@ -925,6 +931,7 @@ class AbstractQuantization:
 
 #     return VoronoiQuantization(quantizer, bounds, weight)
 
+
 class VoronoiQuantization(AbstractQuantization):
 
     def _digitize(self, values):
@@ -969,8 +976,8 @@ class VoronoiQuantization(AbstractQuantization):
                 pts = start + (end-start)*t
                 v = np.append(v, pts, axis=0)
             v /= self.weight
-            v[:,0] = formatter1(v[:,0])
-            v[:,1] = formatter2(v[:,1])
+            v[:, 0] = formatter1(v[:, 0])
+            v[:, 1] = formatter2(v[:, 1])
             patches.append(Polygon(v))
         collect = PatchCollection(patches)
         collect.set_color(colormap(cnorm(self.probability*100.)))
@@ -1008,6 +1015,7 @@ class Quantization1D(AbstractQuantization):
             lb=self.bounds[0, 0],
             ub=self.bounds[1, 0]
         )
+
 
 def _format_2d_bounds(bounds1, bounds2):
     bounds = np.empty((2, 2))
@@ -1107,8 +1115,6 @@ class ConditionalQuantization2D(AbstractQuantization):
     def _get_value(self, value1, value2):
         value1 = np.broadcast_to(value1[:, np.newaxis], value2.shape)
         return np.stack((value1, value2), axis=2)
-
-
 
 
 ################################
@@ -1290,7 +1296,7 @@ class Optimizer1D:
             starting, search_bounds = self._get_starting(search_bounds)
 
         result = starting
-        if self._is_optimal(result): # Starting is already a solution!
+        if self._is_optimal(result):  # Starting is already a solution!
             if self.verbose:
                 self._print_important("Starting value already optimal")
         else:
@@ -1310,8 +1316,8 @@ class Optimizer1D:
             while opt.is_tight:
                 if self.verbose:
                     self._print_important(
-                            "Solution is tight. "
-                          "Expand search bounds and re-try...")
+                        "Solution is tight. "
+                        "Expand search bounds and re-try...")
                 result = opt.do_bfgs()
 
             # Refine
@@ -1440,7 +1446,6 @@ class Optimizer1D:
         print("### " + msg + " ###")
 
 
-
 class _Optimizer1D:
 
     OFFSET = 50
@@ -1472,7 +1477,6 @@ class _Optimizer1D:
         theta = theta+0.5 if theta < 0 else 0.5-theta
         return np.log(theta) < -10.
 
-
     def __init__(
             self, factory, starting_value, search_bounds,
             maxiter, weight, verbose, formatter):
@@ -1484,7 +1488,7 @@ class _Optimizer1D:
         self.weight = weight
         self.verbose = verbose
         self.verbose_value = (
-                self.verbose and self.starting_value.size < 100)
+            self.verbose and self.starting_value.size < 100)
         self.formatter = formatter
 
     class Logger:
@@ -1589,16 +1593,18 @@ class _Optimizer1D:
             self.factory,
             self.starting_value,
             self.search_bounds
-            )
+        )
         log = self.Logger(
-                f.make,
-                f.x0,
-                self.search_bounds,
-                self.verbose,
-                self.formatter
-                )
+            f.make,
+            f.x0,
+            self.search_bounds,
+            self.verbose,
+            self.formatter
+        )
         log._print_preamble("Changed Convex Optimization [BFGS]")
+
         def func(x): return f.make(x).distortion
+
         def jac(x): return f.make(x).gradient
         kwoptions = {
             'maxiter': self.maxiter,
@@ -1607,13 +1613,13 @@ class _Optimizer1D:
             'norm': np.inf
         }
         optimum = minimize(
-                func,
-                f.x0,
-                method='bfgs',
-                jac=jac,
-                options=kwoptions,
-                callback=log
-                )
+            func,
+            f.x0,
+            method='bfgs',
+            jac=jac,
+            options=kwoptions,
+            callback=log
+        )
         log.register_optimum(
             optimum.x,
             success=optimum.success,
@@ -1633,7 +1639,7 @@ class _Optimizer1D:
             self.factory,
             self.starting_value,
             self.weight
-            )
+        )
         log = self.Logger(
             f.make, f.x0, self.search_bounds, self.verbose,
             self.formatter)
@@ -1682,7 +1688,7 @@ class _Optimizer1D:
             self.factory,
             self.starting_value,
             self.weight
-            )
+        )
         log = self.Logger(
             f.make,
             f.x0,
@@ -1716,6 +1722,7 @@ class _Optimizer1D:
         if self.verbose:
             print("### " + msg + " ###")
 
+
 class _CachedFactory:
 
     def __init__(self, make=None):
@@ -1734,6 +1741,7 @@ class _CachedFactory:
             self._cache[key] = self._make(x)
         out = self._cache.get(key)
         return out
+
 
 class _ScaledFactory(_CachedFactory):
 
@@ -1755,7 +1763,7 @@ class _ScaledFactory(_CachedFactory):
         @lazy_property
         def value(self):
             value = self.scale*self.x
-            if  np.any(np.diff(value) <= 0.):
+            if np.any(np.diff(value) <= 0.):
                 return None
             else:
                 return value
@@ -1785,7 +1793,7 @@ class _ScaledFactory(_CachedFactory):
         super().__init__()
         self.factory = factory
         self.v0 = np.ravel(v0)
-        self.scale =  1./weight
+        self.scale = 1./weight
         self.size = self.v0.size
         self.x0 = self.invert(v0)
 
@@ -1794,6 +1802,7 @@ class _ScaledFactory(_CachedFactory):
 
     def _make(self, x):
         return self._Quantizer(self.factory, self.scale, x)
+
 
 class _ChangedFactory(_CachedFactory):
 

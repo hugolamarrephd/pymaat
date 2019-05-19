@@ -8,6 +8,7 @@ from pymaat.mathutil import normcdf, norminv
 
 # Black and Scholes Utilities
 
+
 @ravel
 def price(money, total_volatility, put=False):
     logmoney = np.log(money)
@@ -38,6 +39,7 @@ def price(money, total_volatility, put=False):
 #     delta(t,:) = (1/forwards(t)) * (price(t,:)-strikes.*ddKtmp);
 # end
 # end
+
 
 @ravel
 def brent_dekker(
@@ -78,7 +80,7 @@ def brent_dekker(
             Nd2 = normcdf(d2)
             return money*(1.-Nd2) - (1.-Nd1)
 
-        zero_distance = price - np.maximum(money-1.,0.)
+        zero_distance = price - np.maximum(money-1., 0.)
     else:
         def price_fun(money, logmoney, total_volatility):
             d1 = -logmoney/total_volatility + 0.5*total_volatility
@@ -87,7 +89,7 @@ def brent_dekker(
             Nd2 = normcdf(d2)
             return Nd1 - money*Nd2
 
-        zero_distance = price - np.maximum(1.-money,0.)
+        zero_distance = price - np.maximum(1.-money, 0.)
 
     def get_implicit_total_volatility(money, logmoney, price):
         def fun(x):
@@ -107,7 +109,7 @@ def brent_dekker(
             zip(zero_distance, money, logmoney, price)):
         if not np.isfinite(p):
             continue
-        if np.absolute(zd) < eps: # catch near-arbitrage opportunities
+        if np.absolute(zd) < eps:  # catch near-arbitrage opportunities
             log_result[i] = -np.inf
         elif zd > 0.:
             log_result[i] = get_implicit_total_volatility(k, logk, p)
@@ -115,17 +117,17 @@ def brent_dekker(
     return np.exp(log_result)
 
 
+SOR_COEF = np.array([[-0.00006103098165, 1],  # m00, n00
+                     [5.33967643357688, 22.96302109010794],  # m01, n01
+                     [-0.40661990365427, -0.48466536361620],  # m10, n10
+                     [3.25023425332360, -0.77268824532468],  # m02, n02
+                     [-36.19405221599028, -1.34102279982050],  # m11, n11
+                     [0.08975394404851, 0.43027619553168],  # m20, n20
+                     [83.84593224417796, -5.70531500645109],  # m03, n03
+                     [41.21772632732834, 2.45782574294244],  # m12, n12
+                     [3.83815885394565, -0.04763802358853],  # m21, n21
+                     [-0.21619763215668, -0.03326944290044]])  # m30, n30
 
-SOR_COEF = np.array([[-0.00006103098165, 1], # m00, n00
-    [5.33967643357688, 22.96302109010794], # m01, n01
-    [-0.40661990365427, -0.48466536361620], # m10, n10
-    [3.25023425332360, -0.77268824532468], # m02, n02
-    [-36.19405221599028, -1.34102279982050], # m11, n11
-    [0.08975394404851, 0.43027619553168], # m20, n20
-    [83.84593224417796, -5.70531500645109], # m03, n03
-    [41.21772632732834, 2.45782574294244], # m12, n12
-    [3.83815885394565, -0.04763802358853], # m21, n21
-    [-0.21619763215668, -0.03326944290044]]) # m30, n30
 
 @ravel
 def sor(money, price, put=False, rtol=1e-6, max_iter=10, dnc=np.nan):
@@ -152,11 +154,11 @@ def sor(money, price, put=False, rtol=1e-6, max_iter=10, dnc=np.nan):
     # I. Convert to *calls* only
     if put:
         # .. using put-call parity
-        price +=  1.-money
+        price += 1.-money
     # II. Convert to *out-of-the-money* calls only
-    itm = logmoney<0.
+    itm = logmoney < 0.
     logmoney = np.absolute(logmoney)  # Out-of-the-money moneyness only...
-    money = np.exp(logmoney) # ... from now on
+    money = np.exp(logmoney)  # ... from now on
     # Black-scholes conversion of ITM -> OTM
     # We can easily show that price(1/k,sigma) = 1/k*price(k,sigma)+1-1/k
     # Hence, sigma_star solves p = price(k,sigma_star)
@@ -167,53 +169,54 @@ def sor(money, price, put=False, rtol=1e-6, max_iter=10, dnc=np.nan):
     # Initialize (clean data)
     result = np.full_like(money, dnc)
     converged = np.isnan(price)
-    converged = np.logical_or(converged, price<=0.)
-    converged = np.logical_or(converged, price>=1.)
+    converged = np.logical_or(converged, price <= 0.)
+    converged = np.logical_or(converged, price >= 1.)
     flag = np.logical_not(converged)
     # First Guess (Rational Approx.)
+
     def get_first_guess(logk, p):
         ones = np.ones((logk.size,))
         quotient = np.column_stack((
-                        ones, p, -logk, p**2., -logk*p, -logk**2.,
-                        p**3., -logk*p**2., -logk**2.*p, -logk**3.
-                )).dot(SOR_COEF)
-        return quotient[:,0]/quotient[:,1]
+            ones, p, -logk, p**2., -logk*p, -logk**2.,
+            p**3., -logk*p**2., -logk**2.*p, -logk**3.
+        )).dot(SOR_COEF)
+        return quotient[:, 0]/quotient[:, 1]
     result[flag] = get_first_guess(logmoney[flag], price[flag])
     # SOR
+
     def do_sor(starting, logk, price):
             # SOR (omega = 1)
-            absX = logk
-            x = -logk
-            xOverTv = x/starting
-            tvOver2 = 0.5*starting
-            Nm = np.exp(absX)*normcdf(xOverTv - tvOver2)
-            Np = normcdf(xOverTv + tvOver2)
-            F = price + Nm + Np
-            ninvF = norminv(0.5*F)
-            G = ninvF + np.sqrt(ninvF**2. + 2.*absX)
-            # Transformation of sequence
-            absXTimes2 = 2.*absX
-            tvSquared = starting**2.
-            phi = (tvSquared - absXTimes2)/(tvSquared + absXTimes2)
-            fact = 2./(1.+phi)
-            # Results
-            price_estimate = Np - Nm
-            flag = np.absolute(price_estimate/price-1.) > rtol
-            total_volatility = fact*G + (1.-fact)*starting
-            return flag, total_volatility
+        absX = logk
+        x = -logk
+        xOverTv = x/starting
+        tvOver2 = 0.5*starting
+        Nm = np.exp(absX)*normcdf(xOverTv - tvOver2)
+        Np = normcdf(xOverTv + tvOver2)
+        F = price + Nm + Np
+        ninvF = norminv(0.5*F)
+        G = ninvF + np.sqrt(ninvF**2. + 2.*absX)
+        # Transformation of sequence
+        absXTimes2 = 2.*absX
+        tvSquared = starting**2.
+        phi = (tvSquared - absXTimes2)/(tvSquared + absXTimes2)
+        fact = 2./(1.+phi)
+        # Results
+        price_estimate = Np - Nm
+        flag = np.absolute(price_estimate/price-1.) > rtol
+        total_volatility = fact*G + (1.-fact)*starting
+        return flag, total_volatility
     for _ in range(max_iter):
-        if not np.any(flag): # Early stopping criteria
+        if not np.any(flag):  # Early stopping criteria
             break
         else:
             flag_tmp, result_tmp = do_sor(
-                    result[flag], logmoney[flag], price[flag])
+                result[flag], logmoney[flag], price[flag])
             result[flag] = result_tmp
             # Update flag once result are set
             flag[flag] = flag_tmp
     if np.any(flag):
         result[flag] = dnc
         warnings.warns(
-                '{0:d} implicit volatilities did not converge'.format(
-                    np.sum(flag)))
+            '{0:d} implicit volatilities did not converge'.format(
+                np.sum(flag)))
     return result
-

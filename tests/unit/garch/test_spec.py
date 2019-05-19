@@ -19,9 +19,9 @@ class TestHestonNandiGarch:
         next_var, innov = model.one_step_filter(0, 1)
         pt.assert_almost_equal(innov, 0.5-model.retspec.mu)
         pt.assert_almost_equal(next_var,
-                  model.omega
-                + model.beta
-                + model.alpha * (innov - model.gamma) ** 2)
+                               model.omega
+                               + model.beta
+                               + model.alpha * (innov - model.gamma) ** 2)
 
     def test_one_step_generate_at_few_values(self, model):
         next_var, ret = model.one_step_generate(0, 0)
@@ -30,9 +30,9 @@ class TestHestonNandiGarch:
         next_var, ret = model.one_step_generate(0, 1)
         pt.assert_almost_equal(ret, model.retspec.mu-0.5)
         pt.assert_almost_equal(next_var,
-                  model.omega
-                + model.beta
-                + model.alpha * model.gamma ** 2)
+                               model.omega
+                               + model.beta
+                               + model.alpha * model.gamma ** 2)
 
     def test_invalid_param_raise_exception(self):
         with pytest.raises(ValueError):
